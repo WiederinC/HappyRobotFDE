@@ -14,7 +14,7 @@ class CallRecord(Base):
     agreed_rate = Column(Float, nullable=True)
     loadboard_rate = Column(Float, nullable=True)
     num_negotiations = Column(Integer, default=0)
-    outcome = Column(String)  # booked, declined, no_deal, carrier_ineligible
+    outcome = Column(String)  # booked, declined, no_deal, carrier_ineligible, rate_hold, waitlisted
     sentiment = Column(String)  # positive, neutral, negative
     created_at = Column(DateTime, server_default=func.now())
     notes = Column(Text, nullable=True)

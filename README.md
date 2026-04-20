@@ -22,7 +22,13 @@ HappyRobot Platform (voice AI)
         ├── POST /calls/           Record a completed call
         ├── GET  /calls/           List all calls
         ├── GET  /metrics/         Aggregated dashboard metrics
-        └── GET  /dashboard        Analytics dashboard (static HTML)
+        └── GET  /metrics/         Aggregated business metrics
+  Streamlit Dashboard (port 8501)
+        ├── Revenue Impact band (revenue booked vs at-risk)
+        ├── Actionable Insights (auto-generated)
+        ├── Lane Performance table
+        ├── Carrier Value leaderboard
+        └── Daily call volume trend
 ```
 
 ---
@@ -58,13 +64,16 @@ uvicorn api.main:app --reload
 ## Docker
 
 ```bash
-# Build & run (SQLite persisted in a Docker volume)
+# Build & run both services (API + Streamlit dashboard)
 docker compose up --build
 
-# API:       http://localhost:8000
-# Dashboard: http://localhost:8000/dashboard
-# Docs:      http://localhost:8000/docs
+# API:            http://localhost:8000
+# API Docs:       http://localhost:8000/docs
+# Dashboard:      http://localhost:8501
 ```
+
+The API service seeds the database automatically on first start.
+SQLite data is persisted in a named Docker volume (`carrier-data`).
 
 ---
 

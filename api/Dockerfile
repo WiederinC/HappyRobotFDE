@@ -19,4 +19,5 @@ ENV DATABASE_URL=sqlite:////data/carrier.db
 EXPOSE 8000
 
 # Seed the DB then start the server
-CMD ["sh", "-c", "python -m api.seed && uvicorn api.main:app --host 0.0.0.0 --port 8000"]
+# Use $PORT if set (Railway), otherwise default to 8000
+CMD ["sh", "-c", "python -m api.seed && uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

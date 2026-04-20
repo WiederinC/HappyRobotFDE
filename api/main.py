@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 load_dotenv()
 
 from api.database import Base, engine
-from api.routers import calls, carrier, loads, metrics
+from api.routers import calls, carrier, loads, matches, metrics, waitlist
 
 
 @asynccontextmanager
@@ -41,6 +41,8 @@ app.include_router(loads.router)
 app.include_router(carrier.router)
 app.include_router(calls.router)
 app.include_router(metrics.router)
+app.include_router(waitlist.router)
+app.include_router(matches.router)
 
 # Serve the analytics dashboard as static files
 dashboard_dir = Path(__file__).parent.parent / "dashboard"

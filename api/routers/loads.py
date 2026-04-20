@@ -117,21 +117,6 @@ def search_loads(
         if results:
             return results
 
-    # 4. State-level fallback
-    origin_state = _extract_state(origin) if origin else None
-    dest_state = _extract_state(destination) if destination else None
-    if origin_state or dest_state:
-        q = base
-        if origin_state:
-            q = q.filter(Load.origin.ilike(f"%{origin_state}%"))
-        if dest_state:
-            q = q.filter(Load.destination.ilike(f"%{dest_state}%"))
-        if equipment_type:
-            q = q.filter(Load.equipment_type.ilike(f"%{equipment_type}%"))
-        results = q.all()
-        if results:
-            return results
-
     return []
 
     # fallback 1: relax equipment type, keep route

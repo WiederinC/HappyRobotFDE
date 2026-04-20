@@ -1,8 +1,8 @@
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from api.auth import require_api_key
@@ -11,7 +11,7 @@ from api.models.call import CallRecord
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
-VALID_OUTCOMES = {"booked", "declined", "no_deal", "carrier_ineligible"}
+VALID_OUTCOMES = {"booked", "declined", "no_deal", "carrier_ineligible", "rate_hold", "waitlisted"}
 VALID_SENTIMENTS = {"positive", "neutral", "negative"}
 
 
@@ -23,9 +23,53 @@ class CallCreate(BaseModel):
     agreed_rate: Optional[float] = None
     loadboard_rate: Optional[float] = None
     num_negotiations: int = 0
-    outcome: str = "no_deal"  # booked | declined | no_deal | carrier_ineligible
-    sentiment: str = "neutral"  # positive | neutral | negative
+    outcome: str = "no_deal"
+    sentiment: str = "neutral"
     notes: Optional[str] = None
+
+    @field_validator("carrier_mc", mode="before")
+    @classmethod
+    def coerce_mc_to_str(cls, v: Any) -> Optional[str]:
+        """HappyRobot may send MC number as integer — coerce to string."""
+        if v is None:
+            return None
+        return str(v)
+
+    @field_validator("agreed_rate", "initial_offer", "loadboard_rate", mode="before")
+    @classmethod
+    def coerce_rate_to_float(cls, v: Any) -> Optional[float]:
+        """Accept string rates like '1780' and convert to float."""
+        if v is None or v == "":
+            return None
+        try:
+            return float(str(v).replace(",", "").replace("$", ""))
+        except (ValueError, TypeError):
+            return None
+
+    @field_validator("num_negotiations", mode="before")
+    @classmethod
+    def coerce_negotiations(cls, v: Any) -> int:
+        """Accept string integers from HappyRobot."""
+        if v is None or v == "":
+            return 0
+        try:
+            return int(str(v))
+        except (ValueError, TypeError):
+            return 0
+
+    @field_validator("outcome", mode="before")
+    @classmethod
+    def normalise_outcome(cls, v: Any) -> str:
+        if not v:
+            return "no_deal"
+        return str(v).strip().lower()
+
+    @field_validator("sentiment", mode="before")
+    @classmethod
+    def normalise_sentiment(cls, v: Any) -> str:
+        if not v:
+            return "neutral"
+        return str(v).strip().lower()
 
 
 @router.post("/", status_code=201)

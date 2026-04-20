@@ -1,14 +1,81 @@
 import os
+from datetime import datetime
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
+from sqlalchemy.orm import Session
 
 from api.auth import require_api_key
+from api.database import get_db
+from api.models.call import CallRecord
+from api.models.load import Load
 
 router = APIRouter(prefix="/carrier", tags=["carrier"])
 
 FMCSA_WEB_KEY = os.getenv("FMCSA_WEB_KEY", "")
 FMCSA_BASE = "https://mobile.fmcsa.dot.gov/qc/services/carriers"
+
+
+@router.get("/history")
+def get_carrier_history(
+    mc_number: str = Query(..., description="Carrier MC number"),
+    db: Session = Depends(get_db),
+    _=Depends(require_api_key),
+):
+    """
+    Return call history for a returning carrier by MC number.
+    Used by the agent to personalise the greeting and offer relevant loads.
+    """
+    mc_clean = mc_number.strip().lstrip("MC").lstrip("mc").strip()
+    # Accept both "123456" and "MC123456" stored formats
+    calls = (
+        db.query(CallRecord)
+        .filter(
+            CallRecord.carrier_mc.in_([mc_clean, f"MC{mc_clean}"])
+        )
+        .order_by(CallRecord.created_at.desc())
+        .all()
+    )
+
+    if not calls:
+        return {"mc_number": mc_clean, "is_returning": False, "total_calls": 0}
+
+    total = len(calls)
+    bookings = [c for c in calls if c.outcome == "booked"]
+    last = calls[0]
+
+    # Build preferred lanes from booked calls
+    lane_counts: dict[str, int] = {}
+    for c in bookings:
+        if c.load_id:
+            lane_counts[c.load_id] = lane_counts.get(c.load_id, 0) + 1
+    preferred_lanes = sorted(lane_counts, key=lane_counts.get, reverse=True)[:3]
+
+    # Look up the load to get the lane name
+    last_load = db.query(Load).filter(Load.load_id == last.load_id).first() if last.load_id else None
+    last_lane = (
+        f"{last_load.origin} → {last_load.destination}" if last_load else last.load_id
+    )
+
+    last_call_info = {
+        "load_id": last.load_id,
+        "lane": last_lane,
+        "outcome": last.outcome,
+        "agreed_rate": last.agreed_rate,
+        "date": last.created_at.strftime("%Y-%m-%d") if last.created_at else None,
+    }
+
+    return {
+        "mc_number": mc_clean,
+        "carrier_name": last.carrier_name,
+        "is_returning": True,
+        "total_calls": total,
+        "total_bookings": len(bookings),
+        "booking_rate_pct": round(len(bookings) / total * 100, 1),
+        "last_call": last_call_info,
+        "preferred_load_ids": preferred_lanes,
+    }
 
 
 @router.get("/verify")

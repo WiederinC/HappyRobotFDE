@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from api.auth import require_api_key
 from api.database import get_db
 from api.models.call import CallRecord
+from api.models.load import Load
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 
@@ -76,10 +77,11 @@ def get_metrics(db: Session = Depends(get_db), _=Depends(require_api_key)):
     )
     neg_dist = {str(k): v for k, v in sorted(neg_rows, key=lambda x: x[0])}
 
-    # ── Lane performance ──────────────────────────────────────────────────────
+    # ── Lane performance (grouped by origin → destination route) ─────────────
     lane_rows = (
         db.query(
-            CallRecord.load_id,
+            Load.origin,
+            Load.destination,
             func.count(CallRecord.call_id).label("calls"),
             func.sum(
                 case((CallRecord.outcome == "booked", 1), else_=0)
@@ -87,15 +89,16 @@ def get_metrics(db: Session = Depends(get_db), _=Depends(require_api_key)):
             func.avg(CallRecord.agreed_rate).label("avg_rate"),
             func.avg(CallRecord.loadboard_rate).label("avg_board"),
         )
+        .join(Load, CallRecord.load_id == Load.load_id)
         .filter(CallRecord.load_id.isnot(None))
-        .group_by(CallRecord.load_id)
+        .group_by(Load.origin, Load.destination)
         .order_by(func.count(CallRecord.call_id).desc())
         .limit(10)
         .all()
     )
     lane_performance = [
         {
-            "load_id":      row.load_id,
+            "route":        f"{row.origin} → {row.destination}",
             "calls":        row.calls,
             "bookings":     int(row.bookings or 0),
             "booking_rate": round((row.bookings or 0) / row.calls * 100, 1),
@@ -194,7 +197,7 @@ def get_metrics(db: Session = Depends(get_db), _=Depends(require_api_key)):
             insights.append({
                 "type":    "success",
                 "title":   "Top Performing Lane",
-                "message": f"Load {best['load_id']} converts at {best['booking_rate']}% — "
+                "message": f"{best['route']} converts at {best['booking_rate']}% — "
                            f"prioritise this lane for inbound volume.",
             })
 
