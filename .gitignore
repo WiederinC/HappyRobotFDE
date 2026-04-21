@@ -20,6 +20,9 @@ build/
 # Docker volumes
 carrier-data/
 
+# Claude Code
+.claude/
+
 # IDE
 .idea/
 .vscode/
