@@ -15,20 +15,21 @@ HappyRobot Platform (voice AI)
         ▼
   FastAPI Backend  ──── SQLite / Postgres
         │
-        ├── GET  /loads/           Search available loads
-        ├── GET  /loads/{id}       Fetch a specific load
-        ├── PATCH /loads/{id}/book Mark a load as booked
-        ├── GET  /carrier/verify   FMCSA carrier eligibility check
-        ├── POST /calls/           Record a completed call
-        ├── GET  /calls/           List all calls
-        ├── GET  /metrics/         Aggregated dashboard metrics
-        └── GET  /metrics/         Aggregated business metrics
+        ├── GET  /loads/                Search available loads
+        ├── GET  /loads/{id}            Fetch a specific load
+        ├── POST /loads/book            Mark a load as booked
+        ├── GET  /carrier/verify        FMCSA carrier eligibility check
+        ├── GET  /carrier/history       Returning carrier call history
+        ├── POST /calls/                Record a completed call
+        ├── GET  /calls/                List all calls
+        ├── POST /waitlist/             Add carrier to waitlist or rate hold
+        ├── GET  /waitlist/             List waitlist entries
+        ├── GET  /matches/              Cross-reference open loads with waitlist
+        └── GET  /metrics/             Aggregated business metrics
+
   Streamlit Dashboard (port 8501)
-        ├── Revenue Impact band (revenue booked vs at-risk)
-        ├── Actionable Insights (auto-generated)
-        ├── Lane Performance table
-        ├── Carrier Value leaderboard
-        └── Daily call volume trend
+        ├── Overview tab: KPIs, charts, lane performance, carrier value
+        └── Operations tab: open loads, waitlist, callback opportunities
 ```
 
 ---
@@ -56,7 +57,6 @@ python -m api.seed
 uvicorn api.main:app --reload
 
 # API docs:  http://localhost:8000/docs
-# Dashboard: http://localhost:8000/dashboard
 ```
 
 ---
@@ -77,13 +77,31 @@ SQLite data is persisted in a named Docker volume (`carrier-data`).
 
 ---
 
+## Cloud Deployment (Railway)
+
+Both services are deployed on Railway:
+
+| Service   | URL                                                        |
+|-----------|------------------------------------------------------------|
+| API       | https://happyrobot-carrier-production.up.railway.app       |
+| Dashboard | https://dashboard-production-332e.up.railway.app           |
+
+To redeploy:
+```bash
+railway login
+railway up                          # redeploy API
+railway up --service dashboard      # redeploy dashboard
+```
+
+---
+
 ## Environment Variables
 
-| Variable        | Required | Default                        | Description                         |
-|-----------------|----------|--------------------------------|-------------------------------------|
-| `API_KEY`       | Yes      | `hr-dev-key-change-in-prod`    | Shared secret for all endpoints     |
-| `DATABASE_URL`  | No       | `sqlite:///./carrier.db`       | SQLAlchemy DB URL                   |
-| `FMCSA_WEB_KEY` | No       | *(empty — mock mode)*          | FMCSA API key for carrier lookup    |
+| Variable        | Required | Default                     | Description                      |
+|-----------------|----------|-----------------------------|----------------------------------|
+| `API_KEY`       | Yes      | `hr-dev-key-change-in-prod` | Shared secret for all endpoints  |
+| `DATABASE_URL`  | No       | `sqlite:///./carrier.db`    | SQLAlchemy DB URL                |
+| `FMCSA_WEB_KEY` | No       | *(empty — mock mode)*       | FMCSA API key for carrier lookup |
 
 ---
 
@@ -111,6 +129,12 @@ GET /carrier/verify?mc_number=123456
 Returns `eligible: true/false` plus carrier details.
 Without `FMCSA_WEB_KEY`, returns a mock active response for development.
 
+### Carrier history
+```
+GET /carrier/history?mc_number=123456
+```
+Returns returning carrier info: total calls, bookings, last lane, booking rate.
+
 ### Record a call
 ```
 POST /calls/
@@ -119,7 +143,7 @@ X-API-Key: <key>
 
 {
   "load_id": "LD-001",
-  "carrier_mc": "MC123456",
+  "carrier_mc": "123456",
   "carrier_name": "Swift Transport LLC",
   "initial_offer": 2600,
   "agreed_rate": 2750,
@@ -131,59 +155,36 @@ X-API-Key: <key>
 }
 ```
 
-**Outcome values:** `booked` | `declined` | `no_deal` | `carrier_ineligible`
+**Outcome values:** `booked` | `declined` | `no_deal` | `carrier_ineligible` | `rate_hold` | `waitlisted`
 **Sentiment values:** `positive` | `neutral` | `negative`
+
+### Add to waitlist
+```
+POST /waitlist/
+{
+  "entry_type": "lane_unavailable",
+  "carrier_mc": "123456",
+  "carrier_name": "Swift Transport LLC",
+  "origin": "Chicago, IL",
+  "destination": "Dallas, TX",
+  "equipment_type": "Dry Van",
+  "availability_window": "next week"
+}
+```
+
+**Entry types:** `lane_unavailable` | `rate_hold`
 
 ---
 
 ## HappyRobot Workflow — Call Flow
 
-The AI agent follows this sequence on every inbound call:
-
 1. **Greet** the carrier and ask for their **MC number**
-2. Call `GET /carrier/verify?mc_number=<mc>` → if `eligible: false`, politely decline and end the call
-3. Ask for the carrier's **origin / destination / equipment type**
-4. Call `GET /loads/?origin=<o>&destination=<d>&equipment_type=<e>` → pitch the best matching load
-5. **Negotiate** — up to 3 counter-offers; accept if within 5% of loadboard rate
-6. If deal agreed → call `PATCH /loads/{id}/book`, then say "Transfer was successful, the booking team will follow up within 30 minutes"
-7. Post-call → call `POST /calls/` with the extracted data (MC, load, rates, outcome, sentiment)
-
----
-
-## Cloud Deployment (Fly.io example)
-
-```bash
-# Install flyctl, then:
-fly launch --name happyrobot-carrier --region ord
-fly secrets set API_KEY=<strong-key> FMCSA_WEB_KEY=<your-key>
-fly volumes create carrier_data --size 1
-fly deploy
-```
-
-Add to `fly.toml`:
-```toml
-[mounts]
-  source = "carrier_data"
-  destination = "/data"
-```
-
----
-
-## Load Fields Reference
-
-| Field              | Type    | Description                     |
-|--------------------|---------|---------------------------------|
-| `load_id`          | string  | Unique identifier                |
-| `origin`           | string  | Starting location                |
-| `destination`      | string  | Delivery location                |
-| `pickup_datetime`  | string  | Date/time for pickup             |
-| `delivery_datetime`| string  | Date/time for delivery           |
-| `equipment_type`   | string  | Dry Van / Reefer / Flatbed       |
-| `loadboard_rate`   | float   | Listed rate ($)                  |
-| `notes`            | string  | Special instructions             |
-| `weight`           | float   | Load weight (lbs)                |
-| `commodity_type`   | string  | Type of goods                    |
-| `num_of_pieces`    | int     | Number of items                  |
-| `miles`            | float   | Distance                         |
-| `dimensions`       | string  | Trailer size                     |
-| `status`           | string  | `available` or `booked`          |
+2. Call `GET /carrier/verify` → if `eligible: false`, decline and end
+3. Call `GET /carrier/history` → personalise greeting for returning carriers
+4. Ask for origin / equipment type / availability
+5. Call `GET /loads/` → pitch the best matching load (RPM, fuel estimate)
+6. **Negotiate** — up to 3 rounds; accept if within 10% of loadboard rate
+7. If deal agreed → call `POST /loads/book`, send confirmation email
+8. Offer circuit load from delivery city (search origin = destination)
+9. If no loads → offer waitlist via `POST /waitlist/`
+10. Post-call AI node → extracts data → `POST /calls/`

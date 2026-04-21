@@ -16,14 +16,6 @@ class BookLoadBody(BaseModel):
     load_id: str
 
 
-def _extract_state(location: str) -> Optional[str]:
-    """Extract state abbreviation from 'City, ST' format."""
-    parts = location.strip().split(",")
-    if len(parts) == 2:
-        return parts[1].strip().upper()
-    return None
-
-
 def _parse_pickup_date(pickup_date: str) -> Optional[tuple[datetime, datetime]]:
     """
     Parse a flexible pickup date string into a (start, end) window.
@@ -119,34 +111,6 @@ def search_loads(
 
     return []
 
-    # fallback 1: relax equipment type, keep route
-    if equipment_type and (origin or destination):
-        q2 = base
-        if origin:
-            q2 = q2.filter(Load.origin.ilike(f"%{origin}%"))
-        if destination:
-            q2 = q2.filter(Load.destination.ilike(f"%{destination}%"))
-        results = q2.all()
-        if results:
-            return results
-
-    # fallback 2: state-level match
-    origin_state = _extract_state(origin) if origin else None
-    dest_state = _extract_state(destination) if destination else None
-    if origin_state or dest_state:
-        q3 = base
-        if origin_state:
-            q3 = q3.filter(Load.origin.ilike(f"%{origin_state}%"))
-        if dest_state:
-            q3 = q3.filter(Load.destination.ilike(f"%{dest_state}%"))
-        if equipment_type:
-            q3 = q3.filter(Load.equipment_type.ilike(f"%{equipment_type}%"))
-        results = q3.all()
-        if results:
-            return results
-
-    return []
-
 
 @router.post("/book")
 def book_load(
@@ -165,23 +129,6 @@ def book_load(
     db.refresh(load)
     return load
 
-
-@router.patch("/{load_id}/book")
-def book_load_rest(
-    load_id: str,
-    db: Session = Depends(get_db),
-    _=Depends(require_api_key),
-):
-    """Book a load by ID. Standard REST endpoint (PATCH /{load_id}/book)."""
-    load = db.query(Load).filter(Load.load_id == load_id).first()
-    if not load:
-        raise HTTPException(status_code=404, detail="Load not found")
-    if load.status != "available":
-        raise HTTPException(status_code=409, detail="Load is not available")
-    load.status = "booked"
-    db.commit()
-    db.refresh(load)
-    return load
 
 
 @router.get("/{load_id}")

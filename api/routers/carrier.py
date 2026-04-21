@@ -102,7 +102,7 @@ async def verify_carrier(
             "note": "FMCSA_WEB_KEY not configured — mock response for development",
         }
 
-    url = f"{FMCSA_BASE}/{mc_clean}?webKey={FMCSA_WEB_KEY}"
+    url = f"{FMCSA_BASE}/docket-number/{mc_clean}?webKey={FMCSA_WEB_KEY}"
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             resp = await client.get(url)
