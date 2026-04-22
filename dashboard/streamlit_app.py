@@ -1,543 +1,586 @@
-import html as html_lib
+"""
+Acme Logistics · HappyRobot Agent Dashboard
+Analytics + Operations · Streamlit
+"""
 import os
-import requests
-import pandas as pd
-import plotly.graph_objects as go
-import streamlit as st
+import html as html_lib
 from datetime import datetime
 
+import pandas as pd
+import plotly.graph_objects as go
+import requests
+import streamlit as st
+
+# ── Config ─────────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="HappyRobot Freight · Analytics",
+    page_title="Acme Logistics · Agent Dashboard",
     page_icon="🚛",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# ── CSS ────────────────────────────────────────────────────────────────────────
-st.markdown("""
+API_URL = os.getenv("API_URL", "https://happyrobot-carrier-production.up.railway.app")
+API_KEY = os.getenv("API_KEY", "hr-dev-key-change-in-prod")
+HEADERS = {"X-API-Key": API_KEY}
+
+# ── Palette ────────────────────────────────────────────────────────────────────
+C = dict(
+    blue="#2563EB", blue_light="#DBEAFE",
+    green="#16A34A", green_light="#DCFCE7",
+    red="#DC2626", red_light="#FEE2E2",
+    amber="#D97706", amber_light="#FEF3C7",
+    gray="#6B7280", gray_light="#F3F4F6",
+    text="#111827", subtext="#6B7280",
+    bg="#F9FAFB", card="#FFFFFF",
+    border="#E5E7EB",
+)
+
+# ── Global CSS ─────────────────────────────────────────────────────────────────
+st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-html,body,[class*="css"],[class*="st-"]{
-    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Inter",sans-serif!important;
-    background:#F2F2F7!important; color:#1D1D1F!important;
-}
-#MainMenu,footer,header{visibility:hidden;}
-.block-container{padding:2.5rem 3rem!important;max-width:1440px!important;}
+  /* Page */
+  [data-testid="stAppViewContainer"] {{background:{C['bg']};}}
+  [data-testid="stHeader"] {{background:{C['bg']};}}
+  section[data-testid="stSidebar"] {{display:none;}}
+  .block-container {{padding:2rem 2.5rem 4rem;max-width:1400px;}}
 
-/* header */
-.app-title{font-size:30px;font-weight:700;letter-spacing:-.8px;color:#1D1D1F;line-height:1.1;}
-.app-sub{font-size:14px;color:#8E8E93;margin-top:4px;}
-.live-pill{display:inline-flex;align-items:center;gap:6px;background:#F0FFF4;color:#1A7A3C;
-    font-size:12px;font-weight:600;padding:6px 14px;border-radius:980px;border:1px solid #C6F6D5;}
-.live-dot{width:7px;height:7px;background:#34C759;border-radius:50%;display:inline-block;
-    animation:pulse 2s infinite;}
-@keyframes pulse{0%,100%{box-shadow:0 0 0 2px rgba(52,199,89,.3);}
-    50%{box-shadow:0 0 0 5px rgba(52,199,89,.1);}}
+  /* Typography */
+  .page-title {{font-size:24px;font-weight:700;color:{C['text']};margin:0;}}
+  .page-sub   {{font-size:14px;color:{C['subtext']};margin:0 0 1.5rem;}}
+  .sec-label  {{font-size:11px;font-weight:700;letter-spacing:.08em;
+                text-transform:uppercase;color:{C['subtext']};margin:1.4rem 0 .6rem;}}
 
-/* section */
-.sec-label{font-size:11px;font-weight:600;color:#8E8E93;text-transform:uppercase;
-    letter-spacing:.8px;margin:2rem 0 .75rem 2px;}
-.hr{height:1px;background:#C7C7CC;margin:1.75rem 0;}
+  /* KPI cards */
+  .kpi-grid   {{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:1rem;}}
+  .kpi        {{background:{C['card']};border:1px solid {C['border']};border-radius:14px;
+                padding:18px 20px;}}
+  .kpi-label  {{font-size:12px;color:{C['subtext']};font-weight:500;margin-bottom:4px;}}
+  .kpi-val    {{font-size:28px;font-weight:700;color:{C['text']};line-height:1;}}
+  .kpi-sub    {{font-size:12px;color:{C['subtext']};margin-top:4px;}}
+  .kpi-val.green{{color:{C['green']};}} .kpi-val.blue{{color:{C['blue']};}}
+  .kpi-val.red  {{color:{C['red']};}}  .kpi-val.amber{{color:{C['amber']};}}
 
-/* insight cards */
-.insight{border-radius:14px;padding:14px 18px;margin-bottom:10px;
-    display:flex;align-items:flex-start;gap:12px;}
-.insight-success{background:#F0FFF4;border-left:4px solid #34C759;}
-.insight-warning{background:#FFFBEB;border-left:4px solid #FF9500;}
-.insight-info   {background:#EFF6FF;border-left:4px solid #0071E3;}
-.insight-icon{font-size:18px;line-height:1;margin-top:1px;}
-.insight-title{font-size:13px;font-weight:600;color:#1D1D1F;margin-bottom:2px;}
-.insight-msg{font-size:12px;color:#6E6E73;line-height:1.5;}
+  /* Chart cards */
+  .cc  {{background:{C['card']};border:1px solid {C['border']};border-radius:14px;
+         padding:18px 20px 8px;height:100%;}}
+  .ct  {{font-size:14px;font-weight:600;color:{C['text']};margin-bottom:2px;}}
+  .cs  {{font-size:12px;color:{C['subtext']};margin-bottom:10px;}}
 
-/* revenue band */
-.rev-band{background:#1D1D1F;border-radius:18px;padding:24px 28px;
-    display:flex;justify-content:space-between;align-items:center;margin-bottom:0;}
-.rev-item{text-align:center;}
-.rev-label{font-size:11px;font-weight:500;color:#8E8E93;text-transform:uppercase;
-    letter-spacing:.6px;margin-bottom:6px;}
-.rev-value{font-size:28px;font-weight:700;letter-spacing:-1px;color:#FFFFFF;}
-.rev-value.green{color:#30D158;}
-.rev-value.red  {color:#FF453A;}
-.rev-value.blue {color:#64D2FF;}
-.rev-divider{width:1px;height:50px;background:#3A3A3C;}
+  /* Table */
+  .tw  {{overflow-x:auto;border-radius:14px;border:1px solid {C['border']};}}
+  .tbl {{border-collapse:collapse;width:100%;font-size:13px;}}
+  .tbl thead tr {{background:{C['gray_light']};}}
+  .tbl th {{padding:10px 14px;text-align:left;font-size:11px;font-weight:700;
+            letter-spacing:.05em;text-transform:uppercase;color:{C['subtext']};
+            white-space:nowrap;border-bottom:1px solid {C['border']};}}
+  .tbl td {{padding:10px 14px;color:{C['text']};border-bottom:1px solid {C['border']};
+            white-space:nowrap;vertical-align:middle;}}
+  .tbl tr:last-child td {{border-bottom:none;}}
+  .tbl tr:hover td {{background:#F8FAFF;}}
+  .bold {{font-weight:600;}}
+  .mono {{font-family:monospace;font-size:12px;}}
 
-/* kpi card */
-.kpi{background:#FFFFFF;border-radius:18px;padding:20px 20px 18px;
-    box-shadow:0 1px 3px rgba(0,0,0,.07),0 1px 2px rgba(0,0,0,.04);
-    border:1px solid rgba(0,0,0,.05);height:100%;}
-.kpi-icon{font-size:20px;margin-bottom:10px;display:block;line-height:1;}
-.kpi-label{font-size:11px;font-weight:600;color:#8E8E93;text-transform:uppercase;
-    letter-spacing:.6px;margin-bottom:6px;}
-.kpi-value{font-size:30px;font-weight:700;letter-spacing:-1px;color:#1D1D1F;line-height:1;}
-.kpi-sub{font-size:12px;color:#8E8E93;margin-top:5px;}
-.a-blue {border-top:3px solid #0071E3;}
-.a-green{border-top:3px solid #34C759;}
-.a-teal {border-top:3px solid #5AC8FA;}
-.a-indigo{border-top:3px solid #5856D6;}
-.a-orange{border-top:3px solid #FF9500;}
-.a-purple{border-top:3px solid #AF52DE;}
-.a-red  {border-top:3px solid #FF3B30;}
-.v-blue {color:#0071E3!important;}
-.v-green{color:#1A7A3C!important;}
-.v-red  {color:#D70015!important;}
+  /* Badges */
+  .badge {{display:inline-block;border-radius:999px;padding:2px 10px;
+           font-size:11px;font-weight:600;white-space:nowrap;}}
+  .booked    {{background:{C['green_light']};color:{C['green']};}}
+  .no_deal   {{background:{C['gray_light']};color:{C['gray']};}}
+  .declined  {{background:{C['red_light']};color:{C['red']};}}
+  .ineligible{{background:{C['amber_light']};color:{C['amber']};}}
+  .positive  {{background:{C['green_light']};color:{C['green']};}}
+  .neutral   {{background:{C['gray_light']};color:{C['gray']};}}
+  .negative  {{background:{C['red_light']};color:{C['red']};}}
+  .rate-hold {{background:{C['red_light']};color:{C['red']};}}
+  .waitlist  {{background:{C['amber_light']};color:{C['amber']};}}
+  .available {{background:{C['green_light']};color:{C['green']};}}
+  .booked-load{{background:{C['gray_light']};color:{C['gray']};}}
 
-/* chart card */
-.cc{background:#FFFFFF;border-radius:18px;padding:22px 22px 8px;
-    box-shadow:0 1px 3px rgba(0,0,0,.07),0 1px 2px rgba(0,0,0,.04);
-    border:1px solid rgba(0,0,0,.05);}
-.ct{font-size:14px;font-weight:600;color:#1D1D1F;margin-bottom:2px;letter-spacing:-.2px;}
-.cs{font-size:12px;color:#8E8E93;margin-bottom:14px;}
+  /* Insight cards */
+  .insight {{border-radius:12px;padding:14px 16px;margin-bottom:6px;display:flex;gap:10px;align-items:flex-start;}}
+  .insight-success{{background:{C['green_light']};border-left:3px solid {C['green']};}}
+  .insight-warning{{background:{C['amber_light']};border-left:3px solid {C['amber']};}}
+  .insight-info   {{background:{C['blue_light']};border-left:3px solid {C['blue']};}}
+  .insight-icon   {{font-size:18px;}}
+  .insight-title  {{font-weight:600;font-size:13px;color:{C['text']};}}
+  .insight-msg    {{font-size:12px;color:{C['subtext']};margin-top:2px;}}
 
-/* table */
-.tw{background:#FFFFFF;border-radius:18px;overflow:hidden;
-    box-shadow:0 1px 3px rgba(0,0,0,.07);border:1px solid rgba(0,0,0,.05);}
-.tbl{width:100%;border-collapse:collapse;font-size:13px;}
-.tbl th{text-align:left;padding:11px 16px;font-size:11px;font-weight:600;color:#8E8E93;
-    text-transform:uppercase;letter-spacing:.5px;background:#FAFAFA;
-    border-bottom:1px solid #E5E5EA;white-space:nowrap;}
-.tbl td{padding:12px 16px;border-bottom:1px solid #F2F2F7;vertical-align:middle;}
-.tbl tr:last-child td{border-bottom:none;}
-.tbl tr:hover td{background:#F9F9FB;}
-.badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:980px;
-    font-size:11px;font-weight:600;white-space:nowrap;}
-.b-booked   {background:#E8F9EE;color:#1A7A3C;}
-.b-declined {background:#FFF4E5;color:#C15900;}
-.b-no_deal  {background:#F2F2F7;color:#6E6E73;}
-.b-ineligible{background:#FFF0F0;color:#D70015;}
-.b-positive {background:#EFF6FF;color:#1B4F9E;}
-.b-neutral  {background:#F2F2F7;color:#6E6E73;}
-.b-negative {background:#FFF0F0;color:#D70015;}
-.mono{font-family:"SF Mono","Menlo","Fira Code",monospace;font-size:12px;color:#6E6E73;}
-.bold{font-weight:600;}
+  /* Ops cards */
+  .ops-card {{background:{C['card']};border:1px solid {C['border']};border-radius:14px;
+              padding:16px 20px;margin-bottom:10px;}}
+  .ops-header {{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}}
+  .ops-title  {{font-weight:700;font-size:15px;color:{C['text']};}}
+  .ops-meta   {{font-size:12px;color:{C['subtext']};}}
+  .ops-detail {{font-size:13px;color:{C['text']};}}
+  .ops-sub    {{font-size:12px;color:{C['subtext']};margin-top:3px;}}
 
-/* button */
-div[data-testid="stButton"]>button{
-    background:#0071E3!important;color:#fff!important;border:none!important;
-    border-radius:980px!important;padding:9px 22px!important;font-size:14px!important;
-    font-weight:500!important;box-shadow:0 1px 3px rgba(0,113,227,.4)!important;
-    transition:all .15s!important;}
-div[data-testid="stButton"]>button:hover{
-    background:#0077ED!important;transform:translateY(-1px)!important;}
-div[data-testid="stTextInput"] input{border-radius:10px!important;
-    border:1px solid #C7C7CC!important;font-size:14px!important;
-    padding:8px 14px!important;background:#FFFFFF!important;}
-.footer{text-align:center;color:#8E8E93;font-size:12px;margin-top:3rem;
-    padding-top:1.25rem;border-top:1px solid #C7C7CC;}
+  /* Divider */
+  .hr {{border:none;border-top:1px solid {C['border']};margin:1.2rem 0;}}
 
-/* tabs */
-div[data-testid="stTabs"] button {
-    font-size:14px!important;font-weight:500!important;color:#8E8E93!important;
-    border:none!important;background:transparent!important;padding:10px 20px!important;
-    border-radius:0!important;}
-div[data-testid="stTabs"] button[aria-selected="true"] {
-    color:#0071E3!important;font-weight:600!important;
-    border-bottom:2px solid #0071E3!important;}
-div[data-testid="stTabs"] [role="tablist"] {
-    border-bottom:1px solid #C7C7CC;margin-bottom:1.5rem;}
+  /* Tabs */
+  [data-testid="stTabs"] button {{font-size:14px;font-weight:500;}}
+  [data-testid="stTabs"] button[aria-selected="true"] {{font-weight:700;}}
 </style>
 """, unsafe_allow_html=True)
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
-C = {"blue":"#0071E3","green":"#34C759","red":"#FF3B30","orange":"#FF9500",
-     "gray":"#8E8E93","indigo":"#5856D6","purple":"#AF52DE","teal":"#5AC8FA"}
+@st.cache_data(ttl=30)
+def fetch(path):
+    try:
+        r = requests.get(f"{API_URL}{path}", headers=HEADERS, timeout=8)
+        r.raise_for_status()
+        return r.json(), None
+    except Exception as e:
+        return None, str(e)
 
-BASE = dict(
-    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(family="-apple-system,BlinkMacSystemFont,'SF Pro Text','Inter'",
-              color="#1D1D1F", size=12),
-    margin=dict(l=0,r=0,t=8,b=0),
+def badge(label, cls):
+    return f'<span class="badge {cls}">{html_lib.escape(str(label))}</span>'
+
+def fmt_money(v):
+    if v is None: return "—"
+    try: return f"${float(v):,.0f}"
+    except: return "—"
+
+def fmt_time(s):
+    if not s: return "—"
+    try:
+        dt = datetime.fromisoformat(s.replace("Z",""))
+        return dt.strftime("%-m/%-d %H:%M")
+    except: return s[:16]
+
+def esc(v):
+    return html_lib.escape(str(v)) if v else "—"
+
+BASE_CHART = dict(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
+    font=dict(family="Inter, system-ui, sans-serif", color=C["text"]),
+    margin=dict(l=0, r=0, t=10, b=0),
 )
 
-def fmt(v, prefix="$"):
-    if v is None: return "—"
-    return f"{prefix}{v:,.0f}" if prefix else f"{v:,.0f}"
-
-def fmt_time(ts):
-    try: return datetime.fromisoformat(ts).strftime("%-d %b · %-I:%M %p")
-    except: return ts or "—"
-
-def badge(text, cls):
-    return f'<span class="badge b-{cls}">{text}</span>'
-
-def kpi(icon, label, value, acc, vcls="", sub=""):
-    s = f'<div class="kpi-sub">{sub}</div>' if sub else ""
-    v = f"kpi-value {vcls}" if vcls else "kpi-value"
-    return f"""<div class="kpi a-{acc}">
-        <span class="kpi-icon">{icon}</span>
-        <div class="kpi-label">{label}</div>
-        <div class="{v}">{value}</div>{s}</div>"""
-
-def fetch(path, url, key):
-    try:
-        r = requests.get(f"{url.rstrip('/')}{path}",
-                         headers={"X-API-Key":key}, timeout=8)
-        r.raise_for_status(); return r.json(), None
-    except Exception as e: return None, str(e)
-
-# ── Sidebar ────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("### ⚙️ Configuration")
-    api_url = st.text_input("API URL", value=os.getenv("API_URL","http://localhost:8000"))
-    api_key = st.text_input("API Key", value=os.getenv("API_KEY","hr-dev-key-change-in-prod"), type="password")
-    st.markdown("---"); st.caption("HappyRobot Carrier Analytics · v2.0")
-
 # ── Header ─────────────────────────────────────────────────────────────────────
-h1,h2 = st.columns([5,1])
+h1, h2 = st.columns([6, 1])
 with h1:
-    st.markdown("""<div style="margin-bottom:2rem;padding-bottom:1.5rem;border-bottom:1px solid #C7C7CC;
-        display:flex;justify-content:space-between;align-items:flex-start;">
-        <div>
-            <div class="app-title">🚛 Carrier Analytics</div>
-            <div class="app-sub">HappyRobot Freight · Inbound Sales Operations Dashboard</div>
-        </div>
-        <div class="live-pill"><span class="live-dot"></span> Live</div>
-    </div>""", unsafe_allow_html=True)
+    st.markdown('<div class="page-title">🚛 Acme Logistics · Agent Dashboard</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="page-sub">HappyRobot AI · Live data · Refreshes every 30s</div>', unsafe_allow_html=True)
 with h2:
-    st.button("↻  Refresh")
+    if st.button("↻  Refresh", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
-# ── Fetch ──────────────────────────────────────────────────────────────────────
-m, e1         = fetch("/metrics/", api_url, api_key)
-calls_raw, e2 = fetch("/calls/", api_url, api_key)
-loads_raw, _  = fetch("/loads/", api_url, api_key)
-waitlist_raw, _ = fetch("/waitlist/", api_url, api_key)
-matches_raw, _ = fetch("/matches/", api_url, api_key)
-if e1 or e2:
-    st.error(f"⚠️  Cannot reach API — {e1 or e2}"); st.stop()
+# ── Fetch all data ─────────────────────────────────────────────────────────────
+m, err_m         = fetch("/metrics/")
+calls,  err_c    = fetch("/calls/")
+loads,  _        = fetch("/loads/")
+waitlist, _      = fetch("/waitlist/")
+matches, _       = fetch("/matches/")
 
-# ── Tab definitions ────────────────────────────────────────────────────────────
-def render_overview():
-    rev_booked   = m.get("revenue_booked", 0)
-    rev_risk     = m.get("revenue_at_risk", 0)
-    rev_per_call = m.get("revenue_per_call", 0)
-    booking_rate = m.get("booking_rate", 0)
-    rate_comp    = m.get("rate_compression_pct", 0)
+if err_m or err_c:
+    st.error(f"⚠️  Cannot reach API — {err_m or err_c}")
+    st.stop()
 
-    st.markdown('<div class="sec-label">Revenue Impact</div>', unsafe_allow_html=True)
+calls    = calls    or []
+loads    = loads    or []
+waitlist = (waitlist or {}).get("entries", [])
+matches  = (matches  or {}).get("matches", [])
+
+# ── Tabs ───────────────────────────────────────────────────────────────────────
+tab_analytics, tab_operations = st.tabs(["📊  Analytics", "⚙️  Operations"])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — ANALYTICS
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_analytics:
+
+    # KPI row
+    total   = m.get("total_calls", 0)
+    booked  = m.get("booked", 0)
+    br      = m.get("booking_rate", 0)
+    rev     = m.get("revenue_booked", 0)
+    rpc     = m.get("revenue_per_call", 0)
+    rc      = m.get("rate_compression_pct", 0)
+    risk    = m.get("revenue_at_risk", 0)
+    avg_neg = m.get("avg_negotiations", 0)
+
     st.markdown(f"""
-    <div class="rev-band">
-        <div class="rev-item"><div class="rev-label">Revenue Booked</div>
-            <div class="rev-value green">${rev_booked:,.0f}</div></div>
-        <div class="rev-divider"></div>
-        <div class="rev-item"><div class="rev-label">Revenue at Risk</div>
-            <div class="rev-value red">${rev_risk:,.0f}</div></div>
-        <div class="rev-divider"></div>
-        <div class="rev-item"><div class="rev-label">Revenue per Call</div>
-            <div class="rev-value blue">${rev_per_call:,.0f}</div></div>
-        <div class="rev-divider"></div>
-        <div class="rev-item"><div class="rev-label">Booking Rate</div>
-            <div class="rev-value {'green' if booking_rate>=50 else 'red'}">{booking_rate:.1f}%</div></div>
-        <div class="rev-divider"></div>
-        <div class="rev-item"><div class="rev-label">Rate Compression</div>
-            <div class="rev-value blue">{rate_comp:.1f}%</div></div>
-    </div>""", unsafe_allow_html=True)
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="kpi-label">Total Calls</div>
+        <div class="kpi-val blue">{total}</div>
+        <div class="kpi-sub">{booked} booked</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Booking Rate</div>
+        <div class="kpi-val {'green' if br>=50 else 'red'}">{br:.1f}%</div>
+        <div class="kpi-sub">Target ≥ 50%</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Revenue Booked</div>
+        <div class="kpi-val green">${rev:,.0f}</div>
+        <div class="kpi-sub">${rpc:,.0f} per call</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Revenue at Risk</div>
+        <div class="kpi-val {'amber' if risk>0 else 'green'}">${risk:,.0f}</div>
+        <div class="kpi-sub">Unconverted loads</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Rate Compression</div>
+        <div class="kpi-val blue">{rc:.1f}%</div>
+        <div class="kpi-sub">Avg {avg_neg:.1f} negotiation rounds</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    insights = m.get("insights", [])
-    if insights:
-        st.markdown('<div class="sec-label">Actionable Insights</div>', unsafe_allow_html=True)
-        cols_ins = st.columns(min(len(insights), 3))
-        type_map = {"success":("✅","insight-success"),"warning":("⚠️","insight-warning"),"info":("💡","insight-info")}
-        for i, ins in enumerate(insights[:3]):
-            icon, cls = type_map.get(ins["type"], ("💡","insight-info"))
-            with cols_ins[i % 3]:
-                st.markdown(f"""<div class="insight {cls}"><span class="insight-icon">{icon}</span>
-                    <div><div class="insight-title">{ins['title']}</div>
-                    <div class="insight-msg">{ins['message']}</div></div></div>""", unsafe_allow_html=True)
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+    # Charts row 1: Outcomes | Sentiment | Daily volume
+    c1, c2, c3 = st.columns(3)
 
-    st.markdown('<div class="sec-label">Activity Metrics</div>', unsafe_allow_html=True)
-    c1,c2,c3,c4,c5,c6,c7 = st.columns(7)
-    avg_agreed  = m.get("avg_agreed_rate",0)
-    avg_board   = m.get("avg_loadboard_rate",0)
-    avg_savings = m.get("avg_savings_per_load",0)
-    avg_neg     = m.get("avg_negotiations",0)
-    brc = "v-green" if booking_rate>=50 else ("v-red" if booking_rate<30 else "")
-    svc = "v-green" if avg_savings>0 else ("v-red" if avg_savings<0 else "")
-    for col, html in [
-        (c1, kpi("📞","Total Calls",     str(m.get("total_calls",0)),  "blue",  "v-blue")),
-        (c2, kpi("✅","Booking Rate",    f"{booking_rate:.1f}%",       "green", brc,   "of all calls")),
-        (c3, kpi("📦","Loads Booked",    str(m.get("booked",0)),       "teal",  "v-blue")),
-        (c4, kpi("💰","Avg Agreed Rate", fmt(avg_agreed),              "indigo","",    "negotiated")),
-        (c5, kpi("📋","Avg Board Rate",  fmt(avg_board),               "orange","",    "listed rate")),
-        (c6, kpi("📉","Avg Savings",     fmt(abs(avg_savings)),        "purple",svc,   "vs board rate")),
-        (c7, kpi("🔄","Avg Rounds",      f"{avg_neg:.1f}",             "red",   "",    "per call")),
-    ]:
-        with col: st.markdown(html, unsafe_allow_html=True)
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="sec-label">Performance Overview</div>', unsafe_allow_html=True)
-    col_d, col_s, col_v = st.columns([1.1,1.1,2.2])
-    with col_d:
-        outcomes = m.get("outcomes",{})
-        st.markdown('<div class="cc"><div class="ct">Call Outcomes</div><div class="cs">Distribution of all calls</div>', unsafe_allow_html=True)
+    with c1:
+        st.markdown('<div class="cc"><div class="ct">Call Outcomes</div><div class="cs">Distribution across all calls</div>', unsafe_allow_html=True)
+        outcomes = m.get("outcomes", {})
         if outcomes:
-            lbl = list(outcomes.keys()); val = list(outcomes.values())
-            cm  = {"booked":C["green"],"declined":C["orange"],"no_deal":C["gray"],"carrier_ineligible":C["red"]}
+            labels = [k.replace("_"," ").title() for k in outcomes]
+            values = list(outcomes.values())
+            colors = [C["green"] if "booked" in k else C["red"] if "declined" in k
+                      else C["amber"] if "ineligible" in k else C["gray"]
+                      for k in outcomes]
             fig = go.Figure(go.Pie(
-                labels=[l.replace("_"," ").title() for l in lbl], values=val,
-                hole=0.64, marker=dict(colors=[cm.get(l,C["gray"]) for l in lbl],
-                line=dict(color="#FFF",width=3)), textinfo="none",
-                hovertemplate="%{label}: <b>%{value}</b> (%{percent})<extra></extra>",
+                labels=labels, values=values,
+                marker=dict(colors=colors, line=dict(color="#fff", width=2)),
+                hole=0.6, textinfo="none",
+                hovertemplate="%{label}: <b>%{value}</b><extra></extra>",
             ))
-            fig.add_annotation(text=f"<b>{sum(val)}</b><br><span style='font-size:11px;color:#8E8E93'>total</span>",
-                x=0.5,y=0.5,showarrow=False,font=dict(size=20,color="#1D1D1F"))
-            fig.update_layout(**BASE, showlegend=True, height=240,
-                legend=dict(orientation="h",y=-0.12,x=0.5,xanchor="center",font=dict(size=11,color="#6E6E73")))
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar":False})
+            fig.add_annotation(text=f"<b>{total}</b><br><span style='font-size:11px'>calls</span>",
+                               x=0.5, y=0.5, showarrow=False,
+                               font=dict(size=20, color=C["text"]))
+            fig.update_layout(**BASE_CHART, showlegend=True, height=230,
+                              legend=dict(orientation="h", y=-0.15, x=0.5, xanchor="center",
+                                          font=dict(size=11)))
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
         st.markdown('</div>', unsafe_allow_html=True)
-    with col_s:
-        sentiments = m.get("sentiments",{})
+
+    with c2:
         st.markdown('<div class="cc"><div class="ct">Carrier Sentiment</div><div class="cs">Tone across all calls</div>', unsafe_allow_html=True)
+        sentiments = m.get("sentiments", {})
         if sentiments:
-            sl = list(sentiments.keys()); sv = list(sentiments.values())
-            sc = {"positive":C["blue"],"neutral":C["gray"],"negative":C["red"]}
+            sl = list(sentiments.keys())
+            sv = list(sentiments.values())
+            sc = {"positive": C["green"], "neutral": C["gray"], "negative": C["red"]}
             fig2 = go.Figure(go.Bar(
                 x=[l.title() for l in sl], y=sv,
-                marker=dict(color=[sc.get(l,C["gray"]) for l in sl],line=dict(width=0),cornerradius=8),
+                marker=dict(color=[sc.get(l, C["gray"]) for l in sl],
+                            line=dict(width=0), cornerradius=8),
                 text=sv, textposition="outside",
-                textfont=dict(size=13,color="#1D1D1F",weight=600),
+                textfont=dict(size=13, color=C["text"], weight=600),
                 hovertemplate="%{x}: <b>%{y}</b><extra></extra>",
             ))
-            fig2.update_layout(**BASE, showlegend=False, height=240, bargap=0.35,
-                xaxis=dict(showgrid=False,showline=False,tickfont=dict(size=13)),
-                yaxis=dict(showgrid=False,visible=False))
-            st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar":False})
+            fig2.update_layout(**BASE_CHART, showlegend=False, height=230, bargap=0.35,
+                               xaxis=dict(showgrid=False, showline=False, tickfont=dict(size=13)),
+                               yaxis=dict(showgrid=False, visible=False))
+            st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
         st.markdown('</div>', unsafe_allow_html=True)
-    with col_v:
-        daily = m.get("daily_calls",[])
-        st.markdown('<div class="cc"><div class="ct">Daily Call Volume</div><div class="cs">Last 30 days · Agent activity trend</div>', unsafe_allow_html=True)
+
+    with c3:
+        st.markdown('<div class="cc"><div class="ct">Daily Call Volume</div><div class="cs">Agent activity trend</div>', unsafe_allow_html=True)
+        daily = m.get("daily_calls", [])
         if daily:
             df_d = pd.DataFrame(daily)
             df_d["date"] = pd.to_datetime(df_d["date"])
-            df_d = df_d.sort_values("date")
-            fig3 = go.Figure()
-            fig3.add_trace(go.Scatter(
+            fig3 = go.Figure(go.Scatter(
                 x=df_d["date"], y=df_d["count"], mode="lines",
-                line=dict(color=C["blue"],width=2.5,shape="spline"),
-                fill="tozeroy", fillcolor="rgba(0,113,227,0.07)",
+                line=dict(color=C["blue"], width=2.5, shape="spline"),
+                fill="tozeroy", fillcolor="rgba(37,99,235,0.08)",
                 hovertemplate="%{x|%b %-d}: <b>%{y} calls</b><extra></extra>",
             ))
-            mi = df_d["count"].idxmax()
-            fig3.add_trace(go.Scatter(
-                x=[df_d.loc[mi,"date"]], y=[df_d.loc[mi,"count"]], mode="markers",
-                marker=dict(color=C["blue"],size=8,line=dict(color="#fff",width=2)),hoverinfo="skip",
-            ))
-            fig3.update_layout(**BASE, showlegend=False, height=240,
-                xaxis=dict(showgrid=False,showline=False,tickformat="%b %-d",tickfont=dict(size=11),nticks=10),
-                yaxis=dict(showgrid=True,gridcolor="#F2F2F7",showline=False,tickfont=dict(size=11),zeroline=False))
-            st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar":False})
+            fig3.update_layout(**BASE_CHART, height=230,
+                               xaxis=dict(showgrid=False, showline=False,
+                                          tickfont=dict(size=11), tickformat="%b %-d"),
+                               yaxis=dict(showgrid=True, gridcolor=C["border"],
+                                          tickfont=dict(size=11)))
+            st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar": False})
         st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="sec-label" style="margin-top:1.5rem">Business Intelligence</div>', unsafe_allow_html=True)
-    bl, br = st.columns(2)
-    with bl:
-        lane_data = m.get("lane_performance",[])
-        rows = ""
-        for l in lane_data:
-            br_val = l["booking_rate"]
-            br_cls = "v-green" if br_val>=60 else ("v-red" if br_val<40 else "")
-            rows += f"""<tr>
-                <td class="bold" style="font-size:12px">{l['route']}</td>
-                <td style="text-align:center">{l['calls']}</td>
-                <td style="text-align:center;font-weight:600" class="{br_cls}">{br_val}%</td>
-                <td style="text-align:right">{fmt(l['avg_rate'])}</td>
-                <td style="text-align:right;color:#8E8E93">{fmt(l['avg_board'])}</td>
-            </tr>"""
-        st.markdown(f"""<div class="tw"><table class="tbl"><thead><tr>
-            <th>Route</th><th style="text-align:center">Calls</th>
-            <th style="text-align:center">Book Rate</th>
-            <th style="text-align:right">Avg Agreed</th>
-            <th style="text-align:right">Board Rate</th>
-            </tr></thead><tbody>{rows or '<tr><td colspan=5 style="text-align:center;color:#8E8E93;padding:2rem">No data yet</td></tr>'}</tbody>
-        </table></div>""", unsafe_allow_html=True)
-        st.caption("Lane Performance — average agreed rate vs board rate per route")
-    with br:
-        carrier_data = m.get("carrier_value",[])
-        rows2 = ""
-        for c in carrier_data:
-            rows2 += f"""<tr>
-                <td class="bold">{c['carrier_name']}</td>
-                <td class="mono" style="color:#8E8E93">{c['carrier_mc']}</td>
-                <td style="text-align:center">{c['bookings']}/{c['calls']}</td>
-                <td style="text-align:center;font-weight:600">{c['booking_rate']}%</td>
-                <td style="text-align:right;font-weight:600;color:#1A7A3C">{fmt(c['total_revenue'])}</td>
-            </tr>"""
-        st.markdown(f"""<div class="tw"><table class="tbl"><thead><tr>
-            <th>Carrier</th><th>MC #</th>
-            <th style="text-align:center">Booked/Calls</th>
-            <th style="text-align:center">Rate</th>
-            <th style="text-align:right">Revenue</th>
-            </tr></thead><tbody>{rows2 or '<tr><td colspan=5 style="text-align:center;color:#8E8E93;padding:2rem">No data yet</td></tr>'}</tbody>
-        </table></div>""", unsafe_allow_html=True)
-        st.caption("Carrier Value — nurture top-revenue relationships")
+    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
-    neg_dist = m.get("negotiations_distribution",{})
-    if neg_dist:
-        st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-        st.markdown('<div class="sec-label">Negotiation Depth</div>', unsafe_allow_html=True)
-        _, nc, _ = st.columns([.05,3.9,.05])
-        with nc:
-            st.markdown('<div class="cc"><div class="ct">Calls by Negotiation Rounds</div><div class="cs">How many counter-offers before close</div>', unsafe_allow_html=True)
-            nl = [f"{k} round{'s' if int(k)!=1 else ''}" for k in neg_dist.keys()]
-            nv = list(neg_dist.values())
+    # Charts row 2: Negotiation rounds | Lane performance
+    c4, c5 = st.columns([1, 2])
+
+    with c4:
+        st.markdown('<div class="cc"><div class="ct">Negotiation Rounds</div><div class="cs">How many rounds to close</div>', unsafe_allow_html=True)
+        neg_dist = m.get("negotiations_distribution", {})
+        if neg_dist:
+            nx = [f"{k} round{'s' if k!='1' else ''}" for k in neg_dist]
+            ny = list(neg_dist.values())
             fig4 = go.Figure(go.Bar(
-                x=nl, y=nv,
-                marker=dict(color=[C["blue"],C["indigo"],C["orange"],C["red"]][:len(nl)],line=dict(width=0),cornerradius=8),
-                text=nv, textposition="outside",
-                textfont=dict(size=14,color="#1D1D1F",weight=600),
+                x=nx, y=ny,
+                marker=dict(color=C["blue"], line=dict(width=0), cornerradius=8),
+                text=ny, textposition="outside",
+                textfont=dict(size=12, color=C["text"], weight=600),
                 hovertemplate="%{x}: <b>%{y} calls</b><extra></extra>",
             ))
-            fig4.update_layout(**BASE, showlegend=False, height=190, bargap=0.5,
-                xaxis=dict(showgrid=False,showline=False,tickfont=dict(size=13)),
-                yaxis=dict(showgrid=False,visible=False))
-            st.plotly_chart(fig4, use_container_width=True, config={"displayModeBar":False})
-            st.markdown('</div>', unsafe_allow_html=True)
+            fig4.update_layout(**BASE_CHART, showlegend=False, height=220, bargap=0.4,
+                               xaxis=dict(showgrid=False, showline=False, tickfont=dict(size=11)),
+                               yaxis=dict(showgrid=False, visible=False))
+            st.plotly_chart(fig4, use_container_width=True, config={"displayModeBar": False})
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with c5:
+        st.markdown('<div class="cc"><div class="ct">Lane Performance</div><div class="cs">Booking rate and avg rate by route</div>', unsafe_allow_html=True)
+        lanes = m.get("lane_performance", [])
+        if lanes:
+            df_l = pd.DataFrame(lanes)
+            fig5 = go.Figure()
+            fig5.add_trace(go.Bar(
+                name="Booking Rate %",
+                x=df_l["route"], y=df_l["booking_rate"],
+                marker=dict(color=C["blue"], cornerradius=6, line=dict(width=0)),
+                yaxis="y", hovertemplate="%{x}<br>Booking rate: <b>%{y:.0f}%</b><extra></extra>",
+            ))
+            fig5.add_trace(go.Scatter(
+                name="Avg Rate $",
+                x=df_l["route"], y=df_l["avg_rate"],
+                mode="markers", marker=dict(color=C["green"], size=10, symbol="diamond"),
+                yaxis="y2", hovertemplate="%{x}<br>Avg rate: <b>$%{y:,.0f}</b><extra></extra>",
+            ))
+            fig5.update_layout(
+                **BASE_CHART, height=220, bargap=0.35,
+                showlegend=True,
+                legend=dict(orientation="h", y=-0.25, x=0.5, xanchor="center", font=dict(size=11)),
+                xaxis=dict(showgrid=False, tickfont=dict(size=9), tickangle=-20),
+                yaxis=dict(showgrid=True, gridcolor=C["border"], tickfont=dict(size=10),
+                           title="Booking %", titlefont=dict(size=10)),
+                yaxis2=dict(overlaying="y", side="right", tickfont=dict(size=10),
+                            title="Avg Rate $", titlefont=dict(size=10), showgrid=False,
+                            tickprefix="$"),
+            )
+            st.plotly_chart(fig5, use_container_width=True, config={"displayModeBar": False})
+        st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-label">Recent Calls · Agent Activity Log</div>', unsafe_allow_html=True)
-    O = {"booked":("b-booked","✓ Booked"),"declined":("b-declined","✕ Declined"),
-         "no_deal":("b-no_deal","— No Deal"),"carrier_ineligible":("b-ineligible","⚠ Ineligible")}
-    S = {"positive":("b-positive","😊 Positive"),"neutral":("b-neutral","😐 Neutral"),
-         "negative":("b-negative","😞 Negative")}
-    if calls_raw:
-        rows3 = ""
-        for c in calls_raw[:50]:
-            oc,ol = O.get(c.get("outcome",""),("b-no_deal",c.get("outcome","")))
-            sc2,sl2 = S.get(c.get("sentiment",""),("b-neutral",c.get("sentiment","")))
-            rows3 += f"""<tr>
-                <td style="color:#8E8E93;font-size:12px">{fmt_time(c.get('created_at',''))}</td>
-                <td class="bold">{c.get('carrier_name') or '—'}</td>
-                <td><span class="mono">{c.get('carrier_mc') or '—'}</span></td>
-                <td><span class="mono">{c.get('load_id') or '—'}</span></td>
-                <td>{fmt(c.get('loadboard_rate'))}</td>
-                <td style="color:#8E8E93">{fmt(c.get('initial_offer'))}</td>
-                <td class="bold">{fmt(c.get('agreed_rate'))}</td>
-                <td style="text-align:center;font-weight:600">{c.get('num_negotiations',0)}</td>
-                <td>{badge(ol,oc[2:])}</td>
-                <td>{badge(sl2,sc2[2:])}</td>
-            </tr>"""
-        st.markdown(f"""<div class="tw"><table class="tbl"><thead><tr>
-            <th>Time</th><th>Carrier</th><th>MC #</th><th>Load</th>
-            <th>Board Rate</th><th>Initial Offer</th><th>Agreed Rate</th>
-            <th style="text-align:center">Rounds</th><th>Outcome</th><th>Sentiment</th>
-            </tr></thead><tbody>{rows3}</tbody></table></div>""", unsafe_allow_html=True)
-    else:
-        st.markdown('<div style="text-align:center;padding:3rem;color:#8E8E93">No calls recorded yet</div>', unsafe_allow_html=True)
 
-
-def render_operations():
-    # Callback Opportunities
-    st.markdown('<div class="sec-label">🔥 Callback Opportunities — Open Loads with Waiting Carriers</div>', unsafe_allow_html=True)
-    match_list = (matches_raw or {}).get("matches", [])
-    if match_list:
-        for mx in match_list:
-            for wc in mx["waiting_carriers"]:
-                tag_color = "#FF3B30" if wc["entry_type"] == "rate_hold" else "#FF9500"
-                tag_label = "Rate Hold" if wc["entry_type"] == "rate_hold" else "Waitlist"
-                rate_note = f"Carrier asked <b>${float(wc['carrier_ask_rate']):,.0f}</b> · Board <b>${mx['loadboard_rate']:,.0f}</b>" if wc.get("carrier_ask_rate") else f"Board rate <b>${mx['loadboard_rate']:,.0f}</b>"
-                match_badge = '<span style="background:#E8F9EE;color:#1A7A3C;border-radius:980px;padding:2px 10px;font-size:11px;font-weight:700;margin-left:8px">✓ Rate Match</span>' if wc.get("rate_match") else ""
+    # Insights
+    insights = m.get("insights", [])
+    if insights:
+        st.markdown('<div class="sec-label">Actionable Insights</div>', unsafe_allow_html=True)
+        type_map = {
+            "success": ("✅", "insight-success"),
+            "warning": ("⚠️", "insight-warning"),
+            "info":    ("💡", "insight-info"),
+        }
+        cols_ins = st.columns(min(len(insights), 3))
+        for i, ins in enumerate(insights[:3]):
+            icon, cls = type_map.get(ins["type"], ("💡", "insight-info"))
+            with cols_ins[i % 3]:
                 st.markdown(f"""
-                <div style="background:#FFFFFF;border-radius:14px;padding:16px 20px;margin-bottom:10px;
-                    border-left:4px solid {tag_color};box-shadow:0 1px 4px rgba(0,0,0,.06);">
-                    <div style="display:flex;justify-content:space-between;align-items:center;">
-                        <div>
-                            <span style="font-weight:700;font-size:15px">{mx['origin']} → {mx['destination']}</span>
-                            <span style="background:{tag_color};color:#fff;border-radius:980px;padding:2px 10px;font-size:11px;font-weight:600;margin-left:10px">{tag_label}</span>
-                            {match_badge}
-                        </div>
-                        <span style="font-size:12px;color:#8E8E93">{mx['equipment_type']} · Pickup {mx['pickup_datetime'][:10]}</span>
-                    </div>
-                    <div style="margin-top:8px;font-size:13px;color:#3A3A3C">
-                        <b>{wc['carrier_name']}</b> · MC {wc['carrier_mc'] or '—'} · {rate_note}
-                        {f"· Available: {wc['availability_window']}" if wc.get('availability_window') else ""}
-                    </div>
-                    {f'<div style="margin-top:4px;font-size:12px;color:#8E8E93">{html_lib.escape(str(wc["notes"]))}</div>' if wc.get("notes") else ""}
+                <div class="insight {cls}">
+                  <span class="insight-icon">{icon}</span>
+                  <div>
+                    <div class="insight-title">{esc(ins['title'])}</div>
+                    <div class="insight-msg">{esc(ins['message'])}</div>
+                  </div>
                 </div>""", unsafe_allow_html=True)
-    else:
-        st.markdown('<div style="text-align:center;padding:2rem;color:#8E8E93;background:#fff;border-radius:14px">No callback opportunities yet — waitlist entries will appear here when a matching load opens up</div>', unsafe_allow_html=True)
 
-    # Open Freights
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-label">Open Freights — Loads Awaiting a Driver</div>', unsafe_allow_html=True)
-    all_loads = loads_raw if isinstance(loads_raw, list) else (loads_raw or {}).get("data", [])
-    open_loads = [l for l in all_loads if l.get("status") == "available"]
-    if open_loads:
-        rows_ol = ""
-        for l in sorted(open_loads, key=lambda x: x.get("pickup_datetime", "")):
-            rows_ol += f"""<tr>
-                <td class="mono bold">{l['load_id']}</td>
-                <td style="font-size:12px">{l['origin']} → {l['destination']}</td>
-                <td style="text-align:center">{l['equipment_type']}</td>
-                <td style="text-align:right;font-weight:600">${l['loadboard_rate']:,.0f}</td>
-                <td style="text-align:center;color:#8E8E93">{str(l.get('pickup_datetime',''))[:10]}</td>
-                <td style="text-align:center">{l.get('miles','—')}</td>
-                <td style="text-align:center;color:#8E8E93">{l.get('commodity_type','—')}</td>
+
+    # Call log table
+    st.markdown('<div class="sec-label">Call Log · Agent Activity</div>', unsafe_allow_html=True)
+    OUTCOME_MAP = {
+        "booked":             ("booked",     "✓ Booked"),
+        "declined":           ("declined",   "✕ Declined"),
+        "no_deal":            ("no_deal",    "— No Deal"),
+        "carrier_ineligible": ("ineligible", "⚠ Ineligible"),
+        "rate_hold":          ("rate-hold",  "⏸ Rate Hold"),
+        "waitlisted":         ("waitlist",   "📋 Waitlist"),
+    }
+    SENT_MAP = {
+        "positive": ("positive", "😊 Positive"),
+        "neutral":  ("neutral",  "😐 Neutral"),
+        "negative": ("negative", "😞 Negative"),
+    }
+    if calls:
+        rows = ""
+        for c in calls[:100]:
+            oc, ol = OUTCOME_MAP.get(c.get("outcome",""), ("no_deal", c.get("outcome","")))
+            sc, sl = SENT_MAP.get(c.get("sentiment",""), ("neutral", c.get("sentiment","")))
+            rows += f"""<tr>
+              <td style="color:{C['subtext']};font-size:12px">{fmt_time(c.get('created_at',''))}</td>
+              <td class="bold">{esc(c.get('carrier_name') or '—')}</td>
+              <td><span class="mono">{esc(c.get('carrier_mc') or '—')}</span></td>
+              <td><span class="mono">{esc(c.get('load_id') or '—')}</span></td>
+              <td>{fmt_money(c.get('loadboard_rate'))}</td>
+              <td style="color:{C['subtext']}">{fmt_money(c.get('initial_offer'))}</td>
+              <td class="bold">{fmt_money(c.get('agreed_rate'))}</td>
+              <td style="text-align:center;font-weight:600">{c.get('num_negotiations',0)}</td>
+              <td>{badge(ol, oc)}</td>
+              <td>{badge(sl, sc)}</td>
             </tr>"""
-        st.markdown(f"""<div class="tw"><table class="tbl"><thead><tr>
-            <th>Load ID</th><th>Route</th><th style="text-align:center">Equipment</th>
-            <th style="text-align:right">Rate</th><th style="text-align:center">Pickup</th>
-            <th style="text-align:center">Miles</th><th style="text-align:center">Commodity</th>
-            </tr></thead><tbody>{rows_ol}</tbody></table></div>""", unsafe_allow_html=True)
-        st.caption(f"{len(open_loads)} loads available — sorted by earliest pickup")
+        st.markdown(f"""
+        <div class="tw"><table class="tbl"><thead><tr>
+          <th>Time</th><th>Carrier</th><th>MC #</th><th>Load</th>
+          <th>Board Rate</th><th>1st Offer</th><th>Agreed Rate</th>
+          <th style="text-align:center">Rounds</th><th>Outcome</th><th>Sentiment</th>
+        </tr></thead><tbody>{rows}</tbody></table></div>
+        """, unsafe_allow_html=True)
     else:
-        st.markdown('<div style="text-align:center;padding:2rem;color:#8E8E93;background:#fff;border-radius:14px">All loads are currently booked</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="text-align:center;padding:3rem;color:{C["subtext"]}">No calls recorded yet</div>', unsafe_allow_html=True)
 
-    # Waitlist
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-label">Waitlist — Carriers Waiting for Loads</div>', unsafe_allow_html=True)
-    wl_entries = (waitlist_raw or {}).get("entries", [])
-    if wl_entries:
-        wl_lane = [e for e in wl_entries if e["entry_type"] == "lane_unavailable"]
-        wl_rate = [e for e in wl_entries if e["entry_type"] == "rate_hold"]
-        wt1, wt2 = st.columns(2)
-        with wt1:
-            st.markdown(f'<div style="font-size:12px;font-weight:600;color:#FF9500;margin-bottom:8px">🟠 Lane Waitlist ({len(wl_lane)})</div>', unsafe_allow_html=True)
-            rows_wl = ""
-            for e in wl_lane:
-                rows_wl += f"""<tr>
-                    <td class="bold">{e.get('carrier_name') or '—'}</td>
-                    <td class="mono" style="color:#8E8E93">{e.get('carrier_mc') or '—'}</td>
-                    <td style="font-size:12px">{e.get('origin','—')} → {e.get('destination','—')}</td>
-                    <td style="text-align:center;color:#8E8E93">{e.get('equipment_type','—')}</td>
-                    <td style="text-align:center;font-size:11px;color:#8E8E93">{e.get('availability_window','—')}</td>
-                </tr>"""
-            st.markdown(f"""<div class="tw"><table class="tbl"><thead><tr>
-                <th>Carrier</th><th>MC #</th><th>Lane</th>
-                <th style="text-align:center">Equipment</th><th style="text-align:center">Available</th>
-                </tr></thead><tbody>{rows_wl or '<tr><td colspan=5 style="text-align:center;color:#8E8E93;padding:1.5rem">None</td></tr>'}</tbody>
-            </table></div>""", unsafe_allow_html=True)
-        with wt2:
-            st.markdown(f'<div style="font-size:12px;font-weight:600;color:#FF3B30;margin-bottom:8px">🔴 Rate Holds ({len(wl_rate)})</div>', unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — OPERATIONS
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_operations:
+
+    ops_c1, ops_c2 = st.columns([1, 1])
+
+    # ── Left column: Available Loads ──────────────────────────────────────────
+    with ops_c1:
+        available = [l for l in loads if l.get("status") == "available"]
+        booked_loads = [l for l in loads if l.get("status") != "available"]
+
+        st.markdown(f'<div class="sec-label">Available Loads ({len(available)})</div>', unsafe_allow_html=True)
+
+        if available:
+            for ld in sorted(available, key=lambda x: x.get("pickup_datetime","")):
+                rpm = round(ld["loadboard_rate"] / ld["miles"], 2) if ld.get("miles") else 0
+                pickup = ld.get("pickup_datetime","")[:16]
+                st.markdown(f"""
+                <div class="ops-card" style="border-left:3px solid {C['green']};">
+                  <div class="ops-header">
+                    <div>
+                      <span class="ops-title">{esc(ld['origin'])} → {esc(ld['destination'])}</span>
+                      <span style="margin-left:8px;">{badge('Available','available')}</span>
+                    </div>
+                    <div style="text-align:right;">
+                      <div style="font-size:16px;font-weight:700;color:{C['green']};">{fmt_money(ld['loadboard_rate'])}</div>
+                      <div style="font-size:11px;color:{C['subtext']};">${rpm}/mi</div>
+                    </div>
+                  </div>
+                  <div class="ops-detail">
+                    <span style="color:{C['subtext']}">{esc(ld.get('equipment_type',''))} · {esc(ld.get('commodity_type',''))} · {esc(str(int(ld['miles']))) if ld.get('miles') else '—'} mi</span>
+                  </div>
+                  <div class="ops-sub">📅 Pickup {pickup} &nbsp;·&nbsp; <span class="mono">{esc(ld['load_id'])}</span></div>
+                  {f'<div class="ops-sub" style="margin-top:4px;color:{C["subtext"]}">{esc(ld["notes"])}</div>' if ld.get("notes") else ""}
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div style="padding:2rem;text-align:center;color:{C["subtext"]}">No available loads</div>', unsafe_allow_html=True)
+
+        if booked_loads:
+            st.markdown(f'<div class="sec-label" style="margin-top:1rem;">Booked / Unavailable ({len(booked_loads)})</div>', unsafe_allow_html=True)
+            for ld in booked_loads[:5]:
+                st.markdown(f"""
+                <div class="ops-card" style="border-left:3px solid {C['border']};opacity:0.7;">
+                  <div class="ops-header">
+                    <div>
+                      <span style="font-weight:600;font-size:14px;color:{C['subtext']}">{esc(ld['origin'])} → {esc(ld['destination'])}</span>
+                      <span style="margin-left:8px;">{badge('Booked','booked-load')}</span>
+                    </div>
+                    <div style="font-size:14px;font-weight:600;color:{C['subtext']}">{fmt_money(ld['loadboard_rate'])}</div>
+                  </div>
+                  <div style="font-size:12px;color:{C['subtext']}">{esc(ld.get('equipment_type',''))} · <span class="mono">{esc(ld['load_id'])}</span></div>
+                </div>
+                """, unsafe_allow_html=True)
+
+    # ── Right column: Waitlist + Callback Opportunities ───────────────────────
+    with ops_c2:
+
+        # Callback opportunities (waitlist matched to loads)
+        st.markdown(f'<div class="sec-label">🔥 Callback Opportunities ({len(matches)})</div>', unsafe_allow_html=True)
+        if matches:
+            for mx in matches:
+                for wc in mx["waiting_carriers"]:
+                    is_rate_hold = wc["entry_type"] == "rate_hold"
+                    tag_cls   = "rate-hold" if is_rate_hold else "waitlist"
+                    tag_label = "Rate Hold"  if is_rate_hold else "Waitlist"
+                    border_c  = C["red"]     if is_rate_hold else C["amber"]
+
+                    carrier_ask = wc.get("carrier_ask_rate","")
+                    try:
+                        rate_line = f'Carrier asked {fmt_money(float(carrier_ask))} · Board {fmt_money(mx["loadboard_rate"])}' if carrier_ask else f'Board {fmt_money(mx["loadboard_rate"])}'
+                    except:
+                        rate_line = f'Board {fmt_money(mx["loadboard_rate"])}'
+
+                    avail = esc(wc.get("availability_window","")) if wc.get("availability_window") else ""
+
+                    st.markdown(f"""
+                    <div class="ops-card" style="border-left:4px solid {border_c};">
+                      <div class="ops-header">
+                        <div>
+                          <span class="ops-title">{esc(mx['origin'])} → {esc(mx['destination'])}</span>
+                          <span style="margin-left:8px;">{badge(tag_label, tag_cls)}</span>
+                        </div>
+                        <div style="font-size:12px;color:{C['subtext']}">{esc(mx['equipment_type'])} · {mx['pickup_datetime'][:10]}</div>
+                      </div>
+                      <div class="ops-detail">MC <strong>{esc(wc['carrier_mc'])}</strong> · {rate_line}</div>
+                      {f'<div class="ops-sub">Available: {avail}</div>' if avail else ""}
+                    </div>
+                    """, unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div style="padding:1.5rem;text-align:center;color:{C["subtext"]}">No callback opportunities right now</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+
+        # Full waitlist
+        rate_holds  = [e for e in waitlist if e["entry_type"] == "rate_hold"]
+        lane_waits  = [e for e in waitlist if e["entry_type"] == "lane_unavailable"]
+
+        st.markdown(f'<div class="sec-label">Rate Holds ({len(rate_holds)})</div>', unsafe_allow_html=True)
+        if rate_holds:
             rows_rh = ""
-            for e in wl_rate:
-                ask = e.get('carrier_ask_rate')
+            for e in rate_holds:
                 rows_rh += f"""<tr>
-                    <td class="bold">{e.get('carrier_name') or '—'}</td>
-                    <td class="mono" style="color:#8E8E93">{e.get('carrier_mc') or '—'}</td>
-                    <td style="font-size:12px">{e.get('origin','—')} → {e.get('destination','—')}</td>
-                    <td style="text-align:right;font-weight:600;color:#FF3B30">${float(ask):,.0f}</td>
-                </tr>""" if ask else f"""<tr>
-                    <td class="bold">{e.get('carrier_name') or '—'}</td>
-                    <td class="mono" style="color:#8E8E93">{e.get('carrier_mc') or '—'}</td>
-                    <td style="font-size:12px">{e.get('origin','—')} → {e.get('destination','—')}</td>
-                    <td style="text-align:right;color:#8E8E93">—</td>
+                  <td>{esc(e.get('origin',''))} → {esc(e.get('destination',''))}</td>
+                  <td><span class="mono">{esc(e.get('carrier_mc',''))}</span></td>
+                  <td style="font-weight:600">{fmt_money(e.get('carrier_ask_rate'))}</td>
+                  <td style="color:{C['subtext']};font-size:12px">{fmt_time(e.get('created_at',''))}</td>
                 </tr>"""
-            st.markdown(f"""<div class="tw"><table class="tbl"><thead><tr>
-                <th>Carrier</th><th>MC #</th><th>Lane</th>
-                <th style="text-align:right">Carrier Ask</th>
-                </tr></thead><tbody>{rows_rh or '<tr><td colspan=4 style="text-align:center;color:#8E8E93;padding:1.5rem">None</td></tr>'}</tbody>
-            </table></div>""", unsafe_allow_html=True)
-    else:
-        st.markdown('<div style="text-align:center;padding:2rem;color:#8E8E93;background:#fff;border-radius:14px">No carriers on waitlist yet</div>', unsafe_allow_html=True)
+            st.markdown(f"""
+            <div class="tw"><table class="tbl"><thead><tr>
+              <th>Lane</th><th>MC #</th><th>Carrier Ask</th><th>Added</th>
+            </tr></thead><tbody>{rows_rh}</tbody></table></div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div style="padding:1rem;color:{C["subtext"]};font-size:13px">No rate holds</div>', unsafe_allow_html=True)
 
+        st.markdown(f'<div class="sec-label" style="margin-top:1rem;">Lane Waitlist ({len(lane_waits)})</div>', unsafe_allow_html=True)
+        if lane_waits:
+            rows_lw = ""
+            for e in lane_waits:
+                rows_lw += f"""<tr>
+                  <td>{esc(e.get('origin',''))} → {esc(e.get('destination',''))}</td>
+                  <td><span class="mono">{esc(e.get('carrier_mc',''))}</span></td>
+                  <td style="color:{C['subtext']};font-size:12px">{esc(e.get('availability_window',''))}</td>
+                  <td style="color:{C['subtext']};font-size:12px">{fmt_time(e.get('created_at',''))}</td>
+                </tr>"""
+            st.markdown(f"""
+            <div class="tw"><table class="tbl"><thead><tr>
+              <th>Lane</th><th>MC #</th><th>Availability</th><th>Added</th>
+            </tr></thead><tbody>{rows_lw}</tbody></table></div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div style="padding:1rem;color:{C["subtext"]};font-size:13px">No lane waitlist entries</div>', unsafe_allow_html=True)
 
-tab1, tab2 = st.tabs(["📊  Overview", "🚛  Operations"])
-with tab1:
-    render_overview()
-with tab2:
-    render_operations()
-
-st.markdown(f"""<div class="footer">
-    HappyRobot Freight Analytics · Built for Acme Logistics ·
-    Updated {datetime.now().strftime("%-d %b %Y at %-I:%M %p")}
-</div>""", unsafe_allow_html=True)
+        # Carrier value table
+        carrier_value = m.get("carrier_value", [])
+        if carrier_value:
+            st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-label">Top Carriers by Revenue</div>', unsafe_allow_html=True)
+            rows_cv = ""
+            for cv in carrier_value[:8]:
+                rows_cv += f"""<tr>
+                  <td class="bold">{esc(cv.get('carrier_name',''))}</td>
+                  <td><span class="mono">{esc(cv.get('carrier_mc',''))}</span></td>
+                  <td style="text-align:center">{cv.get('calls',0)}</td>
+                  <td style="text-align:center">{cv.get('bookings',0)}</td>
+                  <td style="text-align:center;font-weight:600;color:{C['blue']}">{cv.get('booking_rate',0):.0f}%</td>
+                  <td style="font-weight:700;color:{C['green']}">{fmt_money(cv.get('total_revenue'))}</td>
+                </tr>"""
+            st.markdown(f"""
+            <div class="tw"><table class="tbl"><thead><tr>
+              <th>Carrier</th><th>MC #</th>
+              <th style="text-align:center">Calls</th>
+              <th style="text-align:center">Booked</th>
+              <th style="text-align:center">Rate</th>
+              <th>Revenue</th>
+            </tr></thead><tbody>{rows_cv}</tbody></table></div>
+            """, unsafe_allow_html=True)
