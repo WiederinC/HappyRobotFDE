@@ -1,3 +1,4 @@
+import re
 import uuid
 from typing import Any, Optional
 
@@ -10,6 +11,16 @@ from api.database import get_db
 from api.models.waitlist import WaitlistEntry
 
 router = APIRouter(prefix="/waitlist", tags=["waitlist"])
+
+
+def _strip_html(text: Optional[str]) -> Optional[str]:
+    """Remove HTML tags and collapse whitespace. HappyRobot sometimes sends
+    its internal card HTML as field values — this keeps the DB clean."""
+    if not text:
+        return text
+    clean = re.sub(r"<[^>]+>", " ", text)   # replace tags with space
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean or None
 
 
 class WaitlistRequest(BaseModel):
@@ -47,13 +58,13 @@ def add_to_waitlist(payload: WaitlistRequest, db: Session = Depends(get_db)):
         id=str(uuid.uuid4()),
         entry_type=payload.entry_type,
         carrier_mc=payload.carrier_mc,
-        carrier_name=payload.carrier_name,
-        origin=payload.origin,
-        destination=payload.destination,
-        equipment_type=payload.equipment_type,
-        availability_window=payload.availability_window,
+        carrier_name=_strip_html(payload.carrier_name),
+        origin=_strip_html(payload.origin),
+        destination=_strip_html(payload.destination),
+        equipment_type=_strip_html(payload.equipment_type),
+        availability_window=_strip_html(payload.availability_window),
         carrier_ask_rate=payload.carrier_ask_rate,
-        notes=payload.notes,
+        notes=_strip_html(payload.notes),
     )
     db.add(entry)
     db.commit()
@@ -71,6 +82,14 @@ def add_to_waitlist(payload: WaitlistRequest, db: Session = Depends(get_db)):
         )
 
     return {"status": "saved", "id": entry.id, "message": message}
+
+
+@router.delete("/", dependencies=[Depends(require_api_key)])
+def clear_waitlist(db: Session = Depends(get_db)):
+    """Delete all waitlist entries (useful to clear test data)."""
+    deleted = db.query(WaitlistEntry).delete()
+    db.commit()
+    return {"deleted": deleted}
 
 
 @router.get("/", dependencies=[Depends(require_api_key)])
