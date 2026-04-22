@@ -1,3 +1,4 @@
+import html as html_lib
 import os
 import requests
 import pandas as pd
@@ -450,7 +451,7 @@ def render_operations():
                         <b>{wc['carrier_name']}</b> · MC {wc['carrier_mc'] or '—'} · {rate_note}
                         {f"· Available: {wc['availability_window']}" if wc.get('availability_window') else ""}
                     </div>
-                    {f'<div style="margin-top:4px;font-size:12px;color:#8E8E93">{wc["notes"]}</div>' if wc.get("notes") else ""}
+                    {f'<div style="margin-top:4px;font-size:12px;color:#8E8E93">{html_lib.escape(str(wc["notes"]))}</div>' if wc.get("notes") else ""}
                 </div>""", unsafe_allow_html=True)
     else:
         st.markdown('<div style="text-align:center;padding:2rem;color:#8E8E93;background:#fff;border-radius:14px">No callback opportunities yet — waitlist entries will appear here when a matching load opens up</div>', unsafe_allow_html=True)
