@@ -131,6 +131,22 @@ def book_load(
 
 
 
+@router.post("/reset", dependencies=[Depends(require_api_key)])
+def reset_loads(db: Session = Depends(get_db)):
+    """Reset all loads to available with updated future pickup dates (demo reset)."""
+    from api.seed import LOADS
+    for data in LOADS:
+        load = db.query(Load).filter(Load.load_id == data["load_id"]).first()
+        if load:
+            load.status = "available"
+            load.pickup_datetime = data["pickup_datetime"]
+            load.delivery_datetime = data["delivery_datetime"]
+        else:
+            db.add(Load(**data))
+    db.commit()
+    return {"reset": len(LOADS), "message": "All loads reset to available with updated dates."}
+
+
 @router.get("/{load_id}")
 def get_load(load_id: str, db: Session = Depends(get_db), _=Depends(require_api_key)):
     """Get a specific load by ID."""
