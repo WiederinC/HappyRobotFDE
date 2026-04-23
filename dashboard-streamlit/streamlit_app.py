@@ -183,8 +183,47 @@ loads    = loads    or []
 waitlist = (waitlist or {}).get("entries", [])
 matches  = (matches  or {}).get("matches", [])
 
+# ── Pre-compute lane data (used in both tabs) ───────────────────────────────────
+# Build load_id → (origin, destination) lookup
+_load_map = {ld["load_id"]: (ld["origin"], ld["destination"]) for ld in loads if ld.get("load_id")}
+
+# Aggregate per-lane data from booked calls
+_lane_rates:    dict = {}   # lane_key → [agreed_rate, ...]
+lane_carriers:  dict = {}   # lane_key → [{mc, name, rate, date}, ...] (deduplicated by mc)
+lane_bookings:  dict = {}   # lane_key → [{rate, carrier_name, date}, ...] (every booking)
+
+for _c in calls:
+    if _c.get("outcome") == "booked" and _c.get("load_id") and _c.get("agreed_rate"):
+        _key = _load_map.get(_c["load_id"])
+        if not _key:
+            continue
+        _lk = f"{_key[0]} → {_key[1]}"
+        _rate = float(_c["agreed_rate"])
+        _mc   = _c.get("carrier_mc") or ""
+        _name = _c.get("carrier_name") or _mc
+        _date = (_c.get("created_at") or "")[:10]
+
+        _lane_rates.setdefault(_lk, []).append(_rate)
+
+        # Individual booking record for the chart
+        lane_bookings.setdefault(_lk, []).append(
+            {"rate": _rate, "carrier": _name, "date": _date}
+        )
+
+        # Carrier history — keep best (highest) rate per MC
+        existing = {e["mc"]: e for e in lane_carriers.get(_lk, [])}
+        if _mc not in existing or _rate > existing[_mc]["rate"]:
+            existing[_mc] = {"mc": _mc, "name": _name, "rate": _rate, "date": _date}
+        lane_carriers[_lk] = list(existing.values())
+
+# Sort each lane's carrier list by rate desc
+for _lk in lane_carriers:
+    lane_carriers[_lk].sort(key=lambda x: x["rate"], reverse=True)
+
+lane_avg: dict = {lk: sum(v)/len(v) for lk, v in _lane_rates.items()}
+
 # ── Tabs ───────────────────────────────────────────────────────────────────────
-tab_analytics, tab_operations = st.tabs(["📊  Analytics", "⚙️  Operations"])
+tab_analytics, tab_operations, tab_map = st.tabs(["📊  Analytics", "⚙️  Operations", "🗺️  Route Map"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -232,7 +271,191 @@ with tab_analytics:
     </div>
     """, unsafe_allow_html=True)
 
-    # Charts row 1: Outcomes | Sentiment | Daily volume
+    # ── Lane Performance + Carriers side by side ──────────────────────────────
+    st.markdown('<div class="sec-label">Lane Performance &amp; Carriers</div>', unsafe_allow_html=True)
+    col_lane, col_carrier = st.columns([3, 2])
+
+    with col_lane:
+        st.markdown('<div class="cc"><div class="ct">Lane Performance</div>'
+                    '<div class="cs">Revenue bar &nbsp;·&nbsp; ⭐ price paid per booking &nbsp;·&nbsp; 🔷 open board rate</div>',
+                    unsafe_allow_html=True)
+
+        # Open loads per lane
+        _open_by_lane: dict = {}
+        for _ld in loads:
+            if _ld.get("status") == "available":
+                _lk = f"{_ld['origin']} → {_ld['destination']}"
+                _open_by_lane.setdefault(_lk, []).append(float(_ld["loadboard_rate"]))
+
+        # Revenue per lane
+        _lane_rev = {lk: sum(b["rate"] for b in bks) for lk, bks in lane_bookings.items()}
+
+        # All lanes, sorted by revenue desc then open count
+        _all_lk = sorted(
+            set(lane_bookings.keys()) | set(_open_by_lane.keys()),
+            key=lambda lk: (-_lane_rev.get(lk, 0), -len(_open_by_lane.get(lk, []))),
+        )
+
+        if _all_lk:
+            fig5 = go.Figure()
+
+            # Y-axis labels: lane + counts
+            _ticktext = []
+            for lk in _all_lk:
+                n_bk = len(lane_bookings.get(lk, []))
+                n_op = len(_open_by_lane.get(lk, []))
+                parts = []
+                if n_bk: parts.append(f"{n_bk} booked")
+                if n_op: parts.append(f"{n_op} open")
+                suffix = "  (" + " · ".join(parts) + ")" if parts else ""
+                _ticktext.append(f"{lk}{suffix}")
+
+            # ── xaxis (bottom): Revenue — green bars ──────────────────────
+            rev_vals = [_lane_rev.get(lk, 0) for lk in _all_lk]
+            fig5.add_trace(go.Bar(
+                name="Revenue",
+                x=rev_vals, y=_all_lk,
+                orientation="h",
+                xaxis="x", yaxis="y",
+                marker=dict(color=C["green"], opacity=0.7, line=dict(width=0)),
+                hovertemplate="<b>%{y}</b><br>Revenue: $%{x:,.0f}<extra></extra>",
+            ))
+
+            # ── xaxis2 (top): Ride fares — stars per booking ──────────────
+            bk_px, bk_py, bk_ptxt = [], [], []
+            for lk in _all_lk:
+                for bk in lane_bookings.get(lk, []):
+                    bk_px.append(bk["rate"])
+                    bk_py.append(lk)
+                    bk_ptxt.append(
+                        f"<b>{lk}</b><br>"
+                        f"Carrier: {esc(bk['carrier'])}<br>"
+                        f"Agreed: {fmt_money(bk['rate'])}<br>"
+                        f"Date: {bk['date']}"
+                    )
+            if bk_px:
+                fig5.add_trace(go.Scatter(
+                    x=bk_px, y=bk_py,
+                    mode="markers",
+                    name="Price paid",
+                    xaxis="x2", yaxis="y",
+                    marker=dict(symbol="star", size=14, color=C["amber"],
+                                line=dict(color="#fff", width=0.5)),
+                    hovertemplate="%{hovertext}<extra></extra>",
+                    hovertext=bk_ptxt,
+                ))
+
+            # ── xaxis2 (top): Open board rates — blue diamonds ────────────
+            op_px, op_py, op_ptxt = [], [], []
+            for lk in _all_lk:
+                for rate in _open_by_lane.get(lk, []):
+                    op_px.append(rate)
+                    op_py.append(lk)
+                    op_ptxt.append(
+                        f"<b>{lk}</b><br>"
+                        f"Board rate: {fmt_money(rate)}<br>"
+                        f"Status: Open"
+                    )
+            if op_px:
+                fig5.add_trace(go.Scatter(
+                    x=op_px, y=op_py,
+                    mode="markers",
+                    name="Open load (board rate)",
+                    xaxis="x2", yaxis="y",
+                    marker=dict(symbol="diamond", size=11, color=C["blue"],
+                                line=dict(color="#fff", width=0.5)),
+                    hovertemplate="%{hovertext}<extra></extra>",
+                    hovertext=op_ptxt,
+                ))
+
+            _all_prices = bk_px + op_px
+            _r_max  = max(rev_vals)   * 1.18 if rev_vals  else 10000
+            _p_min  = min(_all_prices) * 0.85 if _all_prices else 0
+            _p_max  = max(_all_prices) * 1.15 if _all_prices else 5000
+            chart_h = max(300, len(_all_lk) * 54)
+
+            fig5.update_layout(
+                **BASE_CHART, height=chart_h, bargap=0.4,
+                showlegend=True,
+                legend=dict(orientation="h", y=-0.06, x=0, font=dict(size=11)),
+                # Bottom axis: revenue scale for green bars
+                xaxis=dict(
+                    side="bottom",
+                    showgrid=True, gridcolor=C["border"],
+                    tickprefix="$", tickfont=dict(size=9, color=C["green"]),
+                    range=[0, _r_max],
+                    title=dict(text="Revenue", font=dict(size=10, color=C["green"])),
+                    zeroline=False,
+                ),
+                # Top axis: fare scale for stars & diamonds — overlays same area
+                xaxis2=dict(
+                    side="top",
+                    overlaying="x",
+                    showgrid=False,
+                    tickprefix="$", tickfont=dict(size=9, color=C["amber"]),
+                    range=[_p_min, _p_max],
+                    title=dict(text="Ride fare", font=dict(size=10, color=C["amber"])),
+                    zeroline=False,
+                ),
+                yaxis=dict(
+                    showgrid=False, automargin=True,
+                    tickmode="array", tickvals=_all_lk, ticktext=_ticktext,
+                    tickfont=dict(size=10),
+                    categoryorder="array",
+                    categoryarray=list(reversed(_all_lk)),
+                ),
+            )
+            st.plotly_chart(fig5, use_container_width=True, config={"displayModeBar": False})
+        else:
+            st.markdown(f'<div style="padding:1rem;color:{C["subtext"]};font-size:13px">No data yet</div>',
+                        unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_carrier:
+        # Build carrier stats from calls
+        carrier_stats = {}
+        for c in calls:
+            mc = c.get("carrier_mc") or "—"
+            name = c.get("carrier_name") or mc
+            if mc not in carrier_stats:
+                carrier_stats[mc] = {"name": name, "rides": 0, "spend": 0.0}
+            if c.get("outcome") == "booked":
+                carrier_stats[mc]["rides"] += 1
+                try:
+                    carrier_stats[mc]["spend"] += float(c.get("agreed_rate") or 0)
+                except:
+                    pass
+
+        st.markdown('<div class="cc"><div class="ct">Carriers</div><div class="cs">Rides booked and total spend per carrier</div>', unsafe_allow_html=True)
+        if carrier_stats:
+            sorted_carriers = sorted(carrier_stats.items(), key=lambda x: x[1]["spend"], reverse=True)
+            rows_carriers = ""
+            for mc, stat in sorted_carriers:
+                avg_spend = stat["spend"] / stat["rides"] if stat["rides"] > 0 else 0
+                rows_carriers += f"""<tr>
+                  <td class="bold">{esc(stat['name'])}</td>
+                  <td><span class="mono">{esc(mc)}</span></td>
+                  <td style="text-align:center;font-weight:600;color:{C['blue']}">{stat['rides']}</td>
+                  <td style="font-weight:700;color:{C['green']}">{fmt_money(stat['spend'])}</td>
+                  <td style="color:{C['subtext']}">{fmt_money(avg_spend)}</td>
+                </tr>"""
+            st.markdown(f"""
+            <div class="tw"><table class="tbl"><thead><tr>
+              <th>Carrier</th><th>MC #</th>
+              <th style="text-align:center">Rides</th>
+              <th>Total Spend</th><th>Avg/Ride</th>
+            </tr></thead><tbody>{rows_carriers}</tbody></table></div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div style="padding:1rem;color:{C["subtext"]};font-size:13px">No carrier data yet</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+
+    # ── Call Statistics ───────────────────────────────────────────────────────
+    st.markdown('<div class="sec-label">Call Statistics</div>', unsafe_allow_html=True)
+
+    # Charts row: Outcomes | Sentiment | Daily volume
     c1, c2, c3 = st.columns(3)
 
     with c1:
@@ -269,9 +492,9 @@ with tab_analytics:
             fig2 = go.Figure(go.Bar(
                 x=[l.title() for l in sl], y=sv,
                 marker=dict(color=[sc.get(l, C["gray"]) for l in sl],
-                            line=dict(width=0), cornerradius=8),
+                            line=dict(width=0)),
                 text=sv, textposition="outside",
-                textfont=dict(size=13, color=C["text"], weight=600),
+                textfont=dict(size=13, color=C["text"]),
                 hovertemplate="%{x}: <b>%{y}</b><extra></extra>",
             ))
             fig2.update_layout(**BASE_CHART, showlegend=False, height=230, bargap=0.35,
@@ -302,88 +525,32 @@ with tab_analytics:
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
-    # Charts row 2: Negotiation rounds | Lane performance
-    c4, c5 = st.columns([1, 2])
-
-    with c4:
-        st.markdown('<div class="cc"><div class="ct">Negotiation Rounds</div><div class="cs">How many rounds to close</div>', unsafe_allow_html=True)
-        neg_dist = m.get("negotiations_distribution", {})
-        if neg_dist:
+    # Negotiation rounds
+    st.markdown('<div class="sec-label">Negotiation Rounds</div>', unsafe_allow_html=True)
+    neg_dist = m.get("negotiations_distribution", {})
+    if neg_dist:
+        c4, _ = st.columns([1, 2])
+        with c4:
+            st.markdown('<div class="cc"><div class="ct">Rounds to Close</div><div class="cs">How many rounds per booked call</div>', unsafe_allow_html=True)
             nx = [f"{k} round{'s' if k!='1' else ''}" for k in neg_dist]
             ny = list(neg_dist.values())
             fig4 = go.Figure(go.Bar(
                 x=nx, y=ny,
-                marker=dict(color=C["blue"], line=dict(width=0), cornerradius=8),
+                marker=dict(color=C["blue"], line=dict(width=0)),
                 text=ny, textposition="outside",
-                textfont=dict(size=12, color=C["text"], weight=600),
+                textfont=dict(size=12, color=C["text"]),
                 hovertemplate="%{x}: <b>%{y} calls</b><extra></extra>",
             ))
             fig4.update_layout(**BASE_CHART, showlegend=False, height=220, bargap=0.4,
                                xaxis=dict(showgrid=False, showline=False, tickfont=dict(size=11)),
                                yaxis=dict(showgrid=False, visible=False))
             st.plotly_chart(fig4, use_container_width=True, config={"displayModeBar": False})
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with c5:
-        st.markdown('<div class="cc"><div class="ct">Lane Performance</div><div class="cs">Booking rate and avg rate by route</div>', unsafe_allow_html=True)
-        lanes = m.get("lane_performance", [])
-        if lanes:
-            df_l = pd.DataFrame(lanes)
-            fig5 = go.Figure()
-            fig5.add_trace(go.Bar(
-                name="Booking Rate %",
-                x=df_l["route"], y=df_l["booking_rate"],
-                marker=dict(color=C["blue"], cornerradius=6, line=dict(width=0)),
-                yaxis="y", hovertemplate="%{x}<br>Booking rate: <b>%{y:.0f}%</b><extra></extra>",
-            ))
-            fig5.add_trace(go.Scatter(
-                name="Avg Rate $",
-                x=df_l["route"], y=df_l["avg_rate"],
-                mode="markers", marker=dict(color=C["green"], size=10, symbol="diamond"),
-                yaxis="y2", hovertemplate="%{x}<br>Avg rate: <b>$%{y:,.0f}</b><extra></extra>",
-            ))
-            fig5.update_layout(
-                **BASE_CHART, height=220, bargap=0.35,
-                showlegend=True,
-                legend=dict(orientation="h", y=-0.25, x=0.5, xanchor="center", font=dict(size=11)),
-                xaxis=dict(showgrid=False, tickfont=dict(size=9), tickangle=-20),
-                yaxis=dict(showgrid=True, gridcolor=C["border"], tickfont=dict(size=10),
-                           title="Booking %", titlefont=dict(size=10)),
-                yaxis2=dict(overlaying="y", side="right", tickfont=dict(size=10),
-                            title="Avg Rate $", titlefont=dict(size=10), showgrid=False,
-                            tickprefix="$"),
-            )
-            st.plotly_chart(fig5, use_container_width=True, config={"displayModeBar": False})
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-
-    # Insights
-    insights = m.get("insights", [])
-    if insights:
-        st.markdown('<div class="sec-label">Actionable Insights</div>', unsafe_allow_html=True)
-        type_map = {
-            "success": ("✅", "insight-success"),
-            "warning": ("⚠️", "insight-warning"),
-            "info":    ("💡", "insight-info"),
-        }
-        cols_ins = st.columns(min(len(insights), 3))
-        for i, ins in enumerate(insights[:3]):
-            icon, cls = type_map.get(ins["type"], ("💡", "insight-info"))
-            with cols_ins[i % 3]:
-                st.markdown(f"""
-                <div class="insight {cls}">
-                  <span class="insight-icon">{icon}</span>
-                  <div>
-                    <div class="insight-title">{esc(ins['title'])}</div>
-                    <div class="insight-msg">{esc(ins['message'])}</div>
-                  </div>
-                </div>""", unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
     # Call log table
-    st.markdown('<div class="sec-label">Call Log · Agent Activity</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-label">Call Log</div>', unsafe_allow_html=True)
     OUTCOME_MAP = {
         "booked":             ("booked",     "✓ Booked"),
         "declined":           ("declined",   "✕ Declined"),
@@ -443,6 +610,25 @@ with tab_operations:
             for ld in sorted(available, key=lambda x: x.get("pickup_datetime","")):
                 rpm = round(ld["loadboard_rate"] / ld["miles"], 2) if ld.get("miles") else 0
                 pickup = ld.get("pickup_datetime","")[:16]
+                lane_key = f"{ld['origin']} → {ld['destination']}"
+                avg_r    = lane_avg.get(lane_key)
+                avg_html = (f'<span style="font-size:11px;color:{C["blue"]};margin-left:8px;">'
+                            f'Avg booked {fmt_money(avg_r)}</span>') if avg_r else ""
+
+                # Past carriers on this lane
+                past = lane_carriers.get(lane_key, [])
+                if past:
+                    carrier_chips = " ".join(
+                        f'<span style="display:inline-block;background:{C["blue_light"]};color:{C["blue"]};'
+                        f'border-radius:999px;padding:2px 9px;font-size:11px;margin:2px 2px 0 0;">'
+                        f'{esc(p["name"])} &nbsp;<span style="opacity:.7">{fmt_money(p["rate"])}</span></span>'
+                        for p in past
+                    )
+                    past_html = (f'<div style="margin-top:7px;"><span style="font-size:11px;color:{C["subtext"]};'
+                                 f'margin-right:4px;">Past carriers:</span>{carrier_chips}</div>')
+                else:
+                    past_html = ""
+
                 st.markdown(f"""
                 <div class="ops-card" style="border-left:3px solid {C['green']};">
                   <div class="ops-header">
@@ -452,7 +638,7 @@ with tab_operations:
                     </div>
                     <div style="text-align:right;">
                       <div style="font-size:16px;font-weight:700;color:{C['green']};">{fmt_money(ld['loadboard_rate'])}</div>
-                      <div style="font-size:11px;color:{C['subtext']};">${rpm}/mi</div>
+                      <div style="font-size:11px;color:{C['subtext']};">${rpm}/mi{avg_html}</div>
                     </div>
                   </div>
                   <div class="ops-detail">
@@ -460,6 +646,7 @@ with tab_operations:
                   </div>
                   <div class="ops-sub">📅 Pickup {pickup} &nbsp;·&nbsp; <span class="mono">{esc(ld['load_id'])}</span></div>
                   {f'<div class="ops-sub" style="margin-top:4px;color:{C["subtext"]}">{esc(ld["notes"])}</div>' if ld.get("notes") else ""}
+                  {past_html}
                 </div>
                 """, unsafe_allow_html=True)
         else:
@@ -502,6 +689,9 @@ with tab_operations:
 
                     avail = esc(wc.get("availability_window","")) if wc.get("availability_window") else ""
 
+                    cb_lane_key = f"{mx['origin']} → {mx['destination']}"
+                    cb_avg = lane_avg.get(cb_lane_key)
+                    cb_avg_html = (f'<div class="ops-sub" style="color:{C["blue"]}">Avg booked on this lane: {fmt_money(cb_avg)}</div>') if cb_avg else ""
                     st.markdown(f"""
                     <div class="ops-card" style="border-left:4px solid {border_c};">
                       <div class="ops-header">
@@ -513,6 +703,7 @@ with tab_operations:
                       </div>
                       <div class="ops-detail">MC <strong>{esc(wc['carrier_mc'])}</strong> · {rate_line}</div>
                       {f'<div class="ops-sub">Available: {avail}</div>' if avail else ""}
+                      {cb_avg_html}
                     </div>
                     """, unsafe_allow_html=True)
         else:
@@ -528,15 +719,18 @@ with tab_operations:
         if rate_holds:
             rows_rh = ""
             for e in rate_holds:
+                rh_key = f"{e.get('origin','')} → {e.get('destination','')}"
+                rh_avg = lane_avg.get(rh_key)
                 rows_rh += f"""<tr>
                   <td>{esc(e.get('origin',''))} → {esc(e.get('destination',''))}</td>
                   <td><span class="mono">{esc(e.get('carrier_mc',''))}</span></td>
                   <td style="font-weight:600">{fmt_money(e.get('carrier_ask_rate'))}</td>
+                  <td style="color:{C['blue']};font-weight:600">{fmt_money(rh_avg) if rh_avg else '—'}</td>
                   <td style="color:{C['subtext']};font-size:12px">{fmt_time(e.get('created_at',''))}</td>
                 </tr>"""
             st.markdown(f"""
             <div class="tw"><table class="tbl"><thead><tr>
-              <th>Lane</th><th>MC #</th><th>Carrier Ask</th><th>Added</th>
+              <th>Lane</th><th>MC #</th><th>Carrier Ask</th><th>Avg Booked</th><th>Added</th>
             </tr></thead><tbody>{rows_rh}</tbody></table></div>
             """, unsafe_allow_html=True)
         else:
@@ -546,15 +740,18 @@ with tab_operations:
         if lane_waits:
             rows_lw = ""
             for e in lane_waits:
+                lw_key = f"{e.get('origin','')} → {e.get('destination','')}"
+                lw_avg = lane_avg.get(lw_key)
                 rows_lw += f"""<tr>
                   <td>{esc(e.get('origin',''))} → {esc(e.get('destination',''))}</td>
                   <td><span class="mono">{esc(e.get('carrier_mc',''))}</span></td>
                   <td style="color:{C['subtext']};font-size:12px">{esc(e.get('availability_window',''))}</td>
+                  <td style="color:{C['blue']};font-weight:600">{fmt_money(lw_avg) if lw_avg else '—'}</td>
                   <td style="color:{C['subtext']};font-size:12px">{fmt_time(e.get('created_at',''))}</td>
                 </tr>"""
             st.markdown(f"""
             <div class="tw"><table class="tbl"><thead><tr>
-              <th>Lane</th><th>MC #</th><th>Availability</th><th>Added</th>
+              <th>Lane</th><th>MC #</th><th>Availability</th><th>Avg Booked</th><th>Added</th>
             </tr></thead><tbody>{rows_lw}</tbody></table></div>
             """, unsafe_allow_html=True)
         else:
@@ -584,3 +781,199 @@ with tab_operations:
               <th>Revenue</th>
             </tr></thead><tbody>{rows_cv}</tbody></table></div>
             """, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — ROUTE MAP
+# ══════════════════════════════════════════════════════════════════════════════
+CITY_COORDS = {
+    "Atlanta, GA":      (33.749, -84.388),
+    "Boston, MA":       (42.360, -71.059),
+    "Charlotte, NC":    (35.227, -80.843),
+    "Chicago, IL":      (41.878, -87.630),
+    "Dallas, TX":       (32.776, -96.797),
+    "Denver, CO":       (39.739, -104.984),
+    "Houston, TX":      (29.760, -95.370),
+    "Indianapolis, IN": (39.768, -86.158),
+    "Kansas City, MO":  (39.099, -94.578),
+    "Las Vegas, NV":    (36.169, -115.139),
+    "Los Angeles, CA":  (34.052, -118.244),
+    "Memphis, TN":      (35.149, -90.049),
+    "Miami, FL":        (25.761, -80.192),
+    "Minneapolis, MN":  (44.977, -93.265),
+    "Nashville, TN":    (36.162, -86.781),
+    "New York, NY":     (40.713, -74.006),
+    "Philadelphia, PA": (39.952, -75.165),
+    "Phoenix, AZ":      (33.448, -112.074),
+    "Seattle, WA":      (47.606, -122.332),
+}
+
+with tab_map:
+
+    # Filter controls
+    fc1, fc2, fc3 = st.columns([2, 2, 3])
+    with fc1:
+        show_available = st.checkbox("Available loads", value=True)
+    with fc2:
+        show_booked = st.checkbox("Booked loads", value=True)
+    with fc3:
+        show_waitlist_routes = st.checkbox("Waitlist / Rate Hold routes", value=True)
+
+    fig_map = go.Figure()
+
+    # Track all cities used so we can plot dots
+    used_cities = {}
+
+    def add_route(fig, origin, destination, color, dash, name, hover):
+        o = CITY_COORDS.get(origin)
+        d = CITY_COORDS.get(destination)
+        if not o or not d:
+            return
+        # Great-circle approximation via midpoint
+        mid_lat = (o[0] + d[0]) / 2 + 1.5   # slight arc
+        mid_lon = (o[1] + d[1]) / 2
+        fig.add_trace(go.Scattergeo(
+            lat=[o[0], mid_lat, d[0]],
+            lon=[o[1], mid_lon, d[1]],
+            mode="lines",
+            line=dict(width=2, color=color, dash=dash),
+            name=name,
+            hoverinfo="text",
+            hovertext=hover,
+            showlegend=False,
+        ))
+        # Arrow dot at destination
+        fig.add_trace(go.Scattergeo(
+            lat=[d[0]], lon=[d[1]],
+            mode="markers",
+            marker=dict(size=6, color=color, symbol="circle"),
+            hoverinfo="skip",
+            showlegend=False,
+        ))
+        used_cities[origin]      = used_cities.get(origin, color)
+        used_cities[destination] = used_cities.get(destination, color)
+
+    # ── Available loads ──────────────────────────────────────────────────────
+    if show_available:
+        for ld in loads:
+            if ld.get("status") != "available":
+                continue
+            rpm = round(ld["loadboard_rate"] / ld["miles"], 2) if ld.get("miles") else 0
+            hover = (f"<b>{ld['origin']} → {ld['destination']}</b><br>"
+                     f"{ld['load_id']} · {ld['equipment_type']}<br>"
+                     f"Rate: {fmt_money(ld['loadboard_rate'])} · ${rpm}/mi<br>"
+                     f"Pickup: {ld['pickup_datetime'][:10]}<br>"
+                     f"{ld.get('commodity_type','')}")
+            add_route(fig_map, ld["origin"], ld["destination"],
+                      color=C["green"], dash="solid",
+                      name="Available", hover=hover)
+
+    # ── Booked loads ─────────────────────────────────────────────────────────
+    if show_booked:
+        for ld in loads:
+            if ld.get("status") == "available":
+                continue
+            hover = (f"<b>{ld['origin']} → {ld['destination']}</b><br>"
+                     f"{ld['load_id']} · {ld['equipment_type']}<br>"
+                     f"Rate: {fmt_money(ld['loadboard_rate'])}<br>"
+                     f"Status: {ld.get('status','').title()}")
+            add_route(fig_map, ld["origin"], ld["destination"],
+                      color=C["gray"], dash="dot",
+                      name="Booked", hover=hover)
+
+    # ── Waitlist / Rate hold routes ──────────────────────────────────────────
+    if show_waitlist_routes:
+        for e in waitlist:
+            if not e.get("origin") or not e.get("destination"):
+                continue
+            is_rh = e["entry_type"] == "rate_hold"
+            color = C["red"] if is_rh else C["amber"]
+            label = "Rate Hold" if is_rh else "Waitlist"
+            ask   = f" · Asked {fmt_money(e.get('carrier_ask_rate'))}" if e.get("carrier_ask_rate") else ""
+            hover = (f"<b>{e['origin']} → {e['destination']}</b><br>"
+                     f"{label} · MC {e.get('carrier_mc','—')}{ask}<br>"
+                     f"Avail: {e.get('availability_window','—')}")
+            add_route(fig_map, e["origin"], e["destination"],
+                      color=color, dash="dashdot",
+                      name=label, hover=hover)
+
+    # ── City dots with labels ────────────────────────────────────────────────
+    if used_cities:
+        city_lats = [CITY_COORDS[c][0] for c in used_cities if c in CITY_COORDS]
+        city_lons = [CITY_COORDS[c][1] for c in used_cities if c in CITY_COORDS]
+        city_names = [c for c in used_cities if c in CITY_COORDS]
+        fig_map.add_trace(go.Scattergeo(
+            lat=city_lats, lon=city_lons,
+            mode="markers+text",
+            marker=dict(size=9, color="#1E293B", line=dict(color="#fff", width=1.5)),
+            text=city_names,
+            textposition="top center",
+            textfont=dict(size=10, color="#1E293B", family="Inter, sans-serif"),
+            hoverinfo="text",
+            hovertext=city_names,
+            showlegend=False,
+            name="Cities",
+        ))
+
+    # ── Legend traces (dummy) ────────────────────────────────────────────────
+    for label, color, dash in [
+        ("Available", C["green"], "solid"),
+        ("Booked", C["gray"], "dot"),
+        ("Waitlist", C["amber"], "dashdot"),
+        ("Rate Hold", C["red"], "dashdot"),
+    ]:
+        fig_map.add_trace(go.Scattergeo(
+            lat=[None], lon=[None], mode="lines",
+            line=dict(width=2.5, color=color, dash=dash),
+            name=label, showlegend=True,
+        ))
+
+    fig_map.update_layout(
+        **BASE_CHART,
+        height=640,
+        showlegend=True,
+        legend=dict(
+            orientation="v", x=0.01, y=0.99,
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor=C["border"], borderwidth=1,
+            font=dict(size=12),
+        ),
+        geo=dict(
+            scope="usa",
+            projection_type="albers usa",
+            showland=True,    landcolor="#F1F5F9",
+            showlakes=True,   lakecolor="#DBEAFE",
+            showrivers=False,
+            showcountries=False,
+            showcoastlines=True, coastlinecolor=C["border"],
+            showsubunits=True,   subunitcolor=C["border"],
+            bgcolor="rgba(0,0,0,0)",
+        ),
+    )
+
+    st.plotly_chart(fig_map, use_container_width=True, config={"displayModeBar": False})
+
+    # ── Route summary table ──────────────────────────────────────────────────
+    st.markdown('<div class="sec-label">All Routes</div>', unsafe_allow_html=True)
+    route_rows = ""
+    for ld in sorted(loads, key=lambda x: x.get("pickup_datetime", "")):
+        status_cls = "available" if ld.get("status") == "available" else "booked-load"
+        status_lbl = "Available" if ld.get("status") == "available" else ld.get("status","").title()
+        rpm = round(ld["loadboard_rate"] / ld["miles"], 2) if ld.get("miles") else 0
+        route_rows += f"""<tr>
+          <td class="bold">{esc(ld['origin'])} → {esc(ld['destination'])}</td>
+          <td><span class="mono">{esc(ld['load_id'])}</span></td>
+          <td>{esc(ld.get('equipment_type',''))}</td>
+          <td>{esc(ld.get('commodity_type',''))}</td>
+          <td style="font-weight:600">{fmt_money(ld['loadboard_rate'])}</td>
+          <td style="color:{C['subtext']}">${rpm}/mi</td>
+          <td style="color:{C['subtext']}">{esc(str(int(ld['miles'])) if ld.get('miles') else '—')} mi</td>
+          <td>{ld.get('pickup_datetime','')[:10]}</td>
+          <td>{badge(status_lbl, status_cls)}</td>
+        </tr>"""
+    st.markdown(f"""
+    <div class="tw"><table class="tbl"><thead><tr>
+      <th>Route</th><th>Load ID</th><th>Equipment</th><th>Commodity</th>
+      <th>Rate</th><th>RPM</th><th>Miles</th><th>Pickup</th><th>Status</th>
+    </tr></thead><tbody>{route_rows}</tbody></table></div>
+    """, unsafe_allow_html=True)

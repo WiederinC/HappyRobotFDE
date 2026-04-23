@@ -29,6 +29,10 @@ carrier-data/
 *.swp
 .DS_Store
 
+# Node
+node_modules/
+dashboard-react/dist/
+
 # Logs
 *.log
 nohup.out
