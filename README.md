@@ -83,7 +83,7 @@ Both services are deployed on Railway:
 
 | Service   | URL                                                        |
 |-----------|------------------------------------------------------------|
-| API       | https://happyrobot-carrier-production.up.railway.app       |
+| API       | https://happyrobot-carrier-production.up.railway.app/docs  |
 | Dashboard | https://appapppy-utmefaeiwhgwuoiqvnizjh.streamlit.app/     |
 
 To redeploy:
