@@ -101,7 +101,7 @@ railway up --service dashboard      # redeploy dashboard
 |-----------------|----------|-----------------------------|----------------------------------|
 | `API_KEY`       | Yes      | `hr-dev-key-change-in-prod` | Shared secret for all endpoints  |
 | `DATABASE_URL`  | No       | `sqlite:///./carrier.db`    | SQLAlchemy DB URL                |
-| `FMCSA_WEB_KEY` | No       | *(empty — mock mode)*       | FMCSA API key for carrier lookup |
+| `FMCSA_WEB_KEY` | Yes      
 
 ---
 
