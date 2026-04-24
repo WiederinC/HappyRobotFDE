@@ -452,100 +452,143 @@ with tab_analytics:
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
-    # ── Call Statistics ───────────────────────────────────────────────────────
-    st.markdown('<div class="sec-label">Call Statistics</div>', unsafe_allow_html=True)
+    # ── Caller Overview ────────────────────────────────────────────────────────
+    st.markdown('<div class="sec-label">Caller Overview</div>', unsafe_allow_html=True)
 
-    # Charts row: Outcomes | Sentiment | Daily volume
-    c1, c2, c3 = st.columns(3)
+    outcomes   = m.get("outcomes", {})
+    sentiments = m.get("sentiments", {})
+    daily      = m.get("daily_calls", [])
 
-    with c1:
-        st.markdown('<div class="cc"><div class="ct">Call Outcomes</div><div class="cs">Distribution across all calls</div>', unsafe_allow_html=True)
-        outcomes = m.get("outcomes", {})
+    col_left, col_right = st.columns([3, 2], gap="large")
+
+    with col_left:
+        # ── Outcome breakdown — horizontal bars ──────────────────────────────
+        OUTCOME_CFG = {
+            "booked":             (C["green"], "Booked"),
+            "no_deal":            (C["gray"],  "No Deal"),
+            "rate_hold":          (C["amber"], "Rate Hold"),
+            "waitlisted":         (C["blue"],  "Waitlisted"),
+            "carrier_ineligible": ("#EF4444",  "Ineligible"),
+            "declined":           ("#DC2626",  "Declined"),
+        }
         if outcomes:
-            labels = [k.replace("_"," ").title() for k in outcomes]
-            values = list(outcomes.values())
-            colors = [C["green"] if "booked" in k else C["red"] if "declined" in k
-                      else C["amber"] if "ineligible" in k else C["gray"]
-                      for k in outcomes]
-            fig = go.Figure(go.Pie(
-                labels=labels, values=values,
-                marker=dict(colors=colors, line=dict(color="#fff", width=2)),
-                hole=0.6, textinfo="none",
-                hovertemplate="%{label}: <b>%{value}</b><extra></extra>",
-            ))
-            fig.add_annotation(text=f"<b>{total}</b><br><span style='font-size:11px'>calls</span>",
-                               x=0.5, y=0.5, showarrow=False,
-                               font=dict(size=20, color=C["text"]))
-            fig.update_layout(**BASE_CHART, showlegend=True, height=230,
-                              legend=dict(orientation="h", y=-0.15, x=0.5, xanchor="center",
-                                          font=dict(size=11)))
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-        st.markdown('</div>', unsafe_allow_html=True)
+            total_calls = sum(outcomes.values()) or 1
+            rows_html = ""
+            for key, count in sorted(outcomes.items(), key=lambda x: -x[1]):
+                color, label = OUTCOME_CFG.get(key, (C["gray"], key.replace("_", " ").title()))
+                pct = count / total_calls * 100
+                rows_html += f"""
+                <div style="margin-bottom:14px">
+                  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
+                    <span style="font-size:13px;font-weight:600;color:{C['text']}">{label}</span>
+                    <span style="font-size:13px;color:{C['subtext']}">{count} &nbsp;<span style="font-size:11px;color:{C['subtext']}">({pct:.0f}%)</span></span>
+                  </div>
+                  <div style="background:{C['border']};border-radius:4px;height:8px;overflow:hidden">
+                    <div style="width:{pct:.1f}%;background:{color};height:100%;border-radius:4px;transition:width 0.4s ease"></div>
+                  </div>
+                </div>"""
+            st.markdown(f"""
+            <div class="cc">
+              <div class="ct">Outcome Breakdown</div>
+              <div class="cs">{total_calls} total calls processed by agent</div>
+              <div style="margin-top:18px">{rows_html}</div>
+            </div>""", unsafe_allow_html=True)
 
-    with c2:
-        st.markdown('<div class="cc"><div class="ct">Carrier Sentiment</div><div class="cs">Tone across all calls</div>', unsafe_allow_html=True)
-        sentiments = m.get("sentiments", {})
-        if sentiments:
-            sl = list(sentiments.keys())
-            sv = list(sentiments.values())
-            sc = {"positive": C["green"], "neutral": C["gray"], "negative": C["red"]}
-            fig2 = go.Figure(go.Bar(
-                x=[l.title() for l in sl], y=sv,
-                marker=dict(color=[sc.get(l, C["gray"]) for l in sl],
-                            line=dict(width=0)),
-                text=sv, textposition="outside",
-                textfont=dict(size=13, color=C["text"]),
-                hovertemplate="%{x}: <b>%{y}</b><extra></extra>",
-            ))
-            fig2.update_layout(**BASE_CHART, showlegend=False, height=230, bargap=0.35,
-                               xaxis=dict(showgrid=False, showline=False, tickfont=dict(size=13)),
-                               yaxis=dict(showgrid=False, visible=False))
-            st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
-        st.markdown('</div>', unsafe_allow_html=True)
+    with col_right:
+        # ── Sentiment pills + daily volume sparkline ─────────────────────────
+        SENT_CFG = {
+            "positive": (C["green"],  "#DCFCE7", "Positive"),
+            "neutral":  (C["gray"],   "#F3F4F6", "Neutral"),
+            "negative": ("#EF4444",   "#FEE2E2", "Negative"),
+        }
+        sent_total = sum(sentiments.values()) or 1
+        pills_html = ""
+        for key in ["positive", "neutral", "negative"]:
+            count = sentiments.get(key, 0)
+            color, bg, label = SENT_CFG[key]
+            pct = count / sent_total * 100
+            pills_html += f"""
+            <div style="flex:1;background:{bg};border-radius:10px;padding:16px 12px;text-align:center">
+              <div style="font-size:22px;font-weight:700;color:{color}">{count}</div>
+              <div style="font-size:11px;font-weight:600;color:{color};margin-top:2px;text-transform:uppercase;letter-spacing:0.5px">{label}</div>
+              <div style="font-size:11px;color:{C['subtext']};margin-top:4px">{pct:.0f}% of calls</div>
+            </div>"""
 
-    with c3:
-        st.markdown('<div class="cc"><div class="ct">Daily Call Volume</div><div class="cs">Agent activity trend</div>', unsafe_allow_html=True)
-        daily = m.get("daily_calls", [])
+        st.markdown(f"""
+        <div class="cc">
+          <div class="ct">Carrier Sentiment</div>
+          <div class="cs">Tone distribution across all calls</div>
+          <div style="display:flex;gap:10px;margin-top:18px">{pills_html}</div>
+        </div>""", unsafe_allow_html=True)
+
+        # sparkline
         if daily:
             df_d = pd.DataFrame(daily)
             df_d["date"] = pd.to_datetime(df_d["date"])
-            fig3 = go.Figure(go.Scatter(
+            fig_spark = go.Figure(go.Scatter(
                 x=df_d["date"], y=df_d["count"], mode="lines",
-                line=dict(color=C["blue"], width=2.5, shape="spline"),
-                fill="tozeroy", fillcolor="rgba(37,99,235,0.08)",
+                line=dict(color=C["blue"], width=2, shape="spline"),
+                fill="tozeroy", fillcolor="rgba(37,99,235,0.07)",
                 hovertemplate="%{x|%b %-d}: <b>%{y} calls</b><extra></extra>",
             ))
-            fig3.update_layout(**BASE_CHART, height=230,
-                               xaxis=dict(showgrid=False, showline=False,
-                                          tickfont=dict(size=11), tickformat="%b %-d"),
-                               yaxis=dict(showgrid=True, gridcolor=C["border"],
-                                          tickfont=dict(size=11)))
-            st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar": False})
-        st.markdown('</div>', unsafe_allow_html=True)
+            fig_spark.update_layout(
+                **BASE_CHART, height=130,
+                xaxis=dict(showgrid=False, showline=False, showticklabels=False),
+                yaxis=dict(showgrid=False, visible=False),
+            )
+            st.markdown('<div class="cc" style="margin-top:12px"><div class="ct">Daily Volume</div><div class="cs">Agent call activity</div>', unsafe_allow_html=True)
+            st.plotly_chart(fig_spark, use_container_width=True, config={"displayModeBar": False})
+            st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
-    # Negotiation rounds
-    st.markdown('<div class="sec-label">Negotiation Rounds</div>', unsafe_allow_html=True)
+    # ── Negotiation Intelligence ───────────────────────────────────────────────
+    st.markdown('<div class="sec-label">Negotiation Intelligence</div>', unsafe_allow_html=True)
+
     neg_dist = m.get("negotiations_distribution", {})
+    all_neg_calls = [c for c in calls if c.get("num_negotiations") is not None]
+    avg_rounds = (sum(c.get("num_negotiations", 0) for c in all_neg_calls) / len(all_neg_calls)) if all_neg_calls else 0
+    one_shot = sum(1 for c in calls if c.get("num_negotiations", 0) == 0 and c.get("outcome") == "booked")
+    multi_round = sum(1 for c in calls if c.get("num_negotiations", 0) > 0 and c.get("outcome") == "booked")
+
+    nm1, nm2, nm3, nm4 = st.columns(4)
+    for col, val, label, sub in [
+        (nm1, f"{avg_rounds:.1f}", "Avg Rounds", "to close a booking"),
+        (nm2, str(one_shot), "First-Offer Closes", "accepted at list rate"),
+        (nm3, str(multi_round), "Negotiated Closes", "required counter-offers"),
+        (nm4, f"{(one_shot/(one_shot+multi_round)*100):.0f}%" if (one_shot+multi_round) > 0 else "—", "First-Offer Rate", "% closed without negotiating"),
+    ]:
+        with col:
+            st.markdown(f"""
+            <div class="cc" style="text-align:center;padding:20px 16px">
+              <div style="font-size:28px;font-weight:700;color:{C['text']}">{val}</div>
+              <div style="font-size:13px;font-weight:600;color:{C['text']};margin-top:4px">{label}</div>
+              <div style="font-size:11px;color:{C['subtext']};margin-top:2px">{sub}</div>
+            </div>""", unsafe_allow_html=True)
+
     if neg_dist:
-        c4, _ = st.columns([1, 2])
-        with c4:
-            st.markdown('<div class="cc"><div class="ct">Rounds to Close</div><div class="cs">How many rounds per booked call</div>', unsafe_allow_html=True)
-            nx = [f"{k} round{'s' if k!='1' else ''}" for k in neg_dist]
-            ny = list(neg_dist.values())
-            fig4 = go.Figure(go.Bar(
-                x=nx, y=ny,
-                marker=dict(color=C["blue"], line=dict(width=0)),
-                text=ny, textposition="outside",
-                textfont=dict(size=12, color=C["text"]),
-                hovertemplate="%{x}: <b>%{y} calls</b><extra></extra>",
-            ))
-            fig4.update_layout(**BASE_CHART, showlegend=False, height=220, bargap=0.4,
-                               xaxis=dict(showgrid=False, showline=False, tickfont=dict(size=11)),
-                               yaxis=dict(showgrid=False, visible=False))
-            st.plotly_chart(fig4, use_container_width=True, config={"displayModeBar": False})
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+        neg_total = sum(neg_dist.values()) or 1
+        bars_html = ""
+        for k, v in sorted(neg_dist.items()):
+            label = "No negotiation" if str(k) == "0" else f"{k} round{'s' if str(k) != '1' else ''}"
+            pct = v / neg_total * 100
+            color = C["green"] if str(k) == "0" else C["blue"] if str(k) == "1" else C["amber"] if str(k) == "2" else C["gray"]
+            bars_html += f"""
+            <div style="flex:1;text-align:center">
+              <div style="font-size:20px;font-weight:700;color:{color}">{v}</div>
+              <div style="margin:8px auto 6px;width:40px;background:{C['border']};border-radius:4px;height:60px;display:flex;align-items:flex-end;overflow:hidden">
+                <div style="width:100%;height:{pct:.0f}%;background:{color};border-radius:4px 4px 0 0"></div>
+              </div>
+              <div style="font-size:11px;color:{C['subtext']}">{label}</div>
+              <div style="font-size:11px;font-weight:600;color:{C['text']}">{pct:.0f}%</div>
+            </div>"""
+        st.markdown(f"""
+        <div class="cc">
+          <div class="ct">Rounds to Close</div>
+          <div class="cs">Distribution of negotiation rounds across booked calls</div>
+          <div style="display:flex;gap:8px;margin-top:20px;align-items:flex-end">{bars_html}</div>
+        </div>""", unsafe_allow_html=True)
 
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 

@@ -86,21 +86,11 @@ async def verify_carrier(
     """
     Verify a carrier's eligibility via the FMCSA API.
     Returns eligibility status, legal name, and authority details.
-    If FMCSA_WEB_KEY is not configured, returns a mock response for development.
     """
     mc_clean = mc_number.strip().lstrip("MC").lstrip("mc").strip()
 
     if not FMCSA_WEB_KEY:
-        return {
-            "mc_number": mc_clean,
-            "eligible": True,
-            "legal_name": "Demo Carrier LLC",
-            "dba_name": None,
-            "status": "ACTIVE",
-            "out_of_service": False,
-            "allowed_to_operate": True,
-            "note": "FMCSA_WEB_KEY not configured — mock response for development",
-        }
+        raise HTTPException(status_code=503, detail="FMCSA_WEB_KEY is not configured")
 
     url = f"{FMCSA_BASE}/docket-number/{mc_clean}?webKey={FMCSA_WEB_KEY}"
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -113,26 +103,33 @@ async def verify_carrier(
                     "status": "NOT_FOUND",
                     "legal_name": None,
                 }
-            if resp.status_code == 403:
-                # Key not yet activated — fall back to mock so demos still work
-                return {
-                    "mc_number": mc_clean,
-                    "eligible": True,
-                    "legal_name": "Demo Carrier LLC",
-                    "dba_name": None,
-                    "status": "ACTIVE",
-                    "out_of_service": False,
-                    "allowed_to_operate": True,
-                    "note": "FMCSA key pending activation — mock response",
-                }
             resp.raise_for_status()
             data = resp.json()
-        except httpx.HTTPStatusError:
-            raise HTTPException(status_code=502, detail="FMCSA API returned an error")
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=502, detail=f"FMCSA API returned an error: {e.response.status_code}")
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="FMCSA API timed out")
         except httpx.RequestError:
             raise HTTPException(status_code=502, detail="Could not reach FMCSA API")
 
-    carrier = (data.get("content") or {}).get("carrier") or {}
+    # FMCSA API returns content as either a dict {"carrier": {...}}
+    # or a list [{"carrier": {...}}] — handle both
+    content = data.get("content")
+    if isinstance(content, list):
+        carrier = content[0].get("carrier") or {} if content else {}
+    elif isinstance(content, dict):
+        carrier = content.get("carrier") or {}
+    else:
+        carrier = {}
+
+    if not carrier:
+        return {
+            "mc_number": mc_clean,
+            "eligible": False,
+            "status": "NOT_FOUND",
+            "legal_name": None,
+        }
+
     allowed = carrier.get("allowedToOperate", "N") == "Y"
     out_of_service = carrier.get("outOfServiceDate") is not None
 

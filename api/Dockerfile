@@ -8,7 +8,6 @@ RUN pip install --no-cache-dir -r api/requirements.txt
 
 # Copy project source
 COPY api/ ./api/
-COPY dashboard/ ./dashboard/
 
 # Data directory for SQLite
 RUN mkdir -p /data
